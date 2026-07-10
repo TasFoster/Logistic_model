@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($path = \"d:\\\\Projects\\\\Logistic_Simulator\\\\README.md\"; $text = [System.IO.File]::ReadAllText\\($path, [System.Text.Encoding]::Unicode\\); [System.IO.File]::WriteAllText\\($path, $text, \\(New-Object System.Text.UTF8Encoding\\($false\\)\\)\\); $bytes = [System.IO.File]::ReadAllBytes\\($path\\); \"Размер: $\\($bytes.Length\\) байт\"; \"Первые 16 байт: \" + \\(\\($bytes[0..15] | ForEach-Object { $_.ToString\\('X2'\\) }\\) -join ' '\\))"
+    ]
+  }
+}
