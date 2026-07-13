@@ -1,0 +1,61 @@
+{
+    "schema_version": "0.1-sim",
+    "_comment": "Мини-граф прототипа имитационной модели (13.07). Схема совместима с config/example_graph.json, но ДОБАВЛЕНО поле service_time_s (секунд на обработку одной сущности одним воркером) и блок params. Причина: в общей схеме нет времени обработки узла — без него дискретно-событийная модель не может назначить событие. Это пробел общей схемы, который выносится на согласование со Станиславом (см. README раздел 'Пробелы схемы'). effecive_ellements[].ef здесь трактуется как число параллельных воркеров (серверов) узла.",
+    "nodes": {
+        "node1": {
+            "id": 1,
+            "name": "Priyomka",
+            "type_node": "Input",
+            "transform_kof": [20],
+            "effecive_ellements": [{"name": "people", "ef": 20}],
+            "service_time_s": 30,
+            "type_input": {"type_input_1": "Palet"},
+            "type_output": ["KTY"],
+            "pos": {"x": 1, "y": 1},
+            "scale": {"width": 100, "height": 100}
+        },
+        "node2": {
+            "id": 2,
+            "name": "Vskrytie_KTY",
+            "type_node": "transform",
+            "transform_kof": [27, 1],
+            "effecive_ellements": [{"name": "machine", "ef": 40}],
+            "service_time_s": 30,
+            "type_input": {"type_input_1": "KTY"},
+            "type_output": ["Product", "EmptyKTY"],
+            "pos": {"x": 2, "y": 1},
+            "scale": {"width": 100, "height": 100}
+        },
+        "node3": {
+            "id": 3,
+            "name": "Sortirovka",
+            "type_node": "sort",
+            "transform_kof": [1],
+            "effecive_ellements": [{"name": "machine", "ef": 600}],
+            "service_time_s": 24,
+            "params": {"nonsort_share": 0.05},
+            "type_input": {"type_input_1": "Product"},
+            "type_output": ["Product"],
+            "pos": {"x": 3, "y": 1},
+            "scale": {"width": 100, "height": 100}
+        },
+        "node4": {
+            "id": 4,
+            "name": "Upakovka",
+            "type_node": "pack",
+            "transform_kof": [1],
+            "effecive_ellements": [{"name": "machine", "ef": 700}],
+            "service_time_s": 20,
+            "type_input": {"type_input_1": "Product"},
+            "type_output": ["KTY_out"],
+            "pos": {"x": 4, "y": 1},
+            "scale": {"width": 100, "height": 100}
+        }
+    },
+    "ribs": {
+        "rib1": {"node_in": 1, "node_out": 2, "storage": 200, "type_el": "KTY"},
+        "rib2": {"node_in": 2, "node_out": 3, "storage": 500, "type_el": "Product"},
+        "rib3": {"node_in": 3, "node_out": 4, "storage": 500, "type_el": "Product"}
+    },
+    "input_stream": 100000
+}

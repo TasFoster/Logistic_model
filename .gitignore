@@ -1,0 +1,16 @@
+# Результаты прогонов (кроме финальных для отчёта — добавлять принудительно)
+results/
+output/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# IDE / ОС
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
