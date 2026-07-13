@@ -1,11 +1,31 @@
 {
+    "id": 1,
     "name":"name",
-    "count_input": 1 ,
-    "count_output": 1 ,
-    "func_transform": "",
-    "type_node": "",
-    "count_active_el": 1,
-    "effecive_el": 100,
-    "type_input":"", 
-    "type_output":""
+    "type_node": "", 
+    "transform_kof":[
+        2,
+        2,
+        4
+    ],  
+    "effecive_ellements": [
+        {"name":"name", "ef":100},
+        {"name":"name", "ef":100},
+        {"name":"name", "ef":100}
+    ],
+    "type_input":{
+        "type_input_1":""
+    }, 
+    "type_output":[
+        "",
+        "",
+        ""
+    ],
+    "pos":{
+        "x":1,
+        "y":1
+    },
+    "scale":{
+        "width":100,
+        "height":100
+    }
 }
