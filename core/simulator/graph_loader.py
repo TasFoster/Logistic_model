@@ -88,15 +88,44 @@ def _node_resources(n: dict) -> tuple[int, list[float]]:
     return len(rates), [3600.0 / r for r in rates]
 
 
+def _travel_time(raw: dict, rib: dict, src_pos: dict, dst_pos: dict) -> float:
+    """Время перемещения по ребру, секунд.
+
+    Приоритет — явное поле travel_time_s на ребре. Иначе считается по координатам
+    узлов: расстояние между pos (в единицах плана) * unit_m / скорость + время
+    погрузки-разгрузки. Блок transport задаётся на уровне графа:
+
+        "transport": {"unit_m": 30, "speed_mps": 1.5, "handling_s": 0}
+
+    Если transport не задан, время в пути = 0 (рёбра мгновенные, как раньше).
+    """
+    if "travel_time_s" in rib:
+        return float(rib["travel_time_s"])
+    tr = raw.get("transport") or {}
+    unit_m = float(tr.get("unit_m", 0))
+    speed = float(tr.get("speed_mps", 1.0))
+    handling = float(tr.get("handling_s", 0))
+    if not unit_m or not src_pos or not dst_pos or speed <= 0:
+        return 0.0
+    dx = float(src_pos.get("x", 0)) - float(dst_pos.get("x", 0))
+    dy = float(src_pos.get("y", 0)) - float(dst_pos.get("y", 0))
+    dist_m = ((dx * dx + dy * dy) ** 0.5) * unit_m
+    return dist_m / speed + handling
+
+
 def _ribs(raw: dict) -> list[dict]:
+    pos = {n["id"]: n.get("pos", {}) for n in (raw.get("nodes") or {}).values()}
     out = []
     for name, r in (raw.get("ribs") or {}).items():
+        src = r.get("node_in_id", r.get("node_in"))
+        dst = r.get("node_out_id", r.get("node_out"))
         out.append({
             "name": name,
-            "src": r.get("node_in_id", r.get("node_in")),    # обе версии схемы
-            "dst": r.get("node_out_id", r.get("node_out")),
+            "src": src,                                      # обе версии схемы
+            "dst": dst,
             "etype": r.get("type_el", ""),
             "capacity": r.get("storage", 100),
+            "travel": _travel_time(raw, r, pos.get(src, {}), pos.get(dst, {})),
         })
     return out
 

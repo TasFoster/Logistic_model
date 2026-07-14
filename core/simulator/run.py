@@ -24,6 +24,31 @@ except Exception:
     pass
 
 
+def _scrapped_count(model, split) -> int | None:
+    """Сколько пустой тары ушло в брак.
+
+    Брак с развилки может уходить либо в сток (нет исходящего ребра), либо в узел
+    Storage (вывоз). Ищем ту ветку развилки, которая НЕ ведёт обратно в упаковку.
+    """
+    reuse_types = set()
+    for n in model.nodes.values():
+        if n.by_direction or n.type == "pack":
+            reuse_types |= set(n.inputs)          # то, что упаковка потребляет — это реюз
+    for etype in split.outputs:
+        if etype in reuse_types:
+            continue                              # это ветка повторного использования
+        rib = model.find_rib(split.id, etype)
+        if rib is None:                           # брак ушёл в сток
+            sink = model._sinks.get(etype)
+            if sink is not None:
+                return sink.count
+        else:                                     # брак ушёл в узел (Storage/вывоз)
+            node = model.nodes.get(rib.dst)
+            if node is not None:
+                return node.processed
+    return None
+
+
 def main() -> None:
     here = os.path.dirname(__file__)
     default_graph = os.path.join(here, "graph_mini.json")
@@ -47,6 +72,7 @@ def main() -> None:
     rows = metrics.collect_rows(model)
     metrics.write_csv(rows, os.path.join(args.out, "metrics.csv"))
     metrics.write_minute_series(model, os.path.join(args.out, "series_minute.csv"))
+    written = metrics.write_interval_series(model, args.out)
 
     # краткая сводка в консоль
     print(f"Граф: {args.graph}")
@@ -94,20 +120,26 @@ def main() -> None:
     # сводка баланса оборота тары (если в графе есть цикл тары)
     split = next((n for n in model.nodes.values() if n.type == "split"), None)
     new_kty = sum(n.produced for n in model.nodes.values() if n.type == "source")
-    brak = model._sinks.get("Brak")
-    if split is not None and brak is not None:
-        empties = split.processed / sim_h
-        scrapped = brak.count / sim_h
-        reused = empties - scrapped
-        new_rate = new_kty / sim_h
-        supply = reused + new_rate
+    if split is not None:
+        scrapped_total = _scrapped_count(model, split)
+        if scrapped_total is not None:
+            empties = split.processed / sim_h
+            scrapped = scrapped_total / sim_h
+            reused = empties - scrapped
+            new_rate = new_kty / sim_h
+            supply = reused + new_rate
+            print("-" * 68)
+            print("ОБОРОТ ТАРЫ (КТЯ):")
+            print(f"  вскрыто пустых КТЯ : {empties:>8.0f} шт/ч")
+            print(f"  реюз (повторно)    : {reused:>8.0f} шт/ч  ({100*reused/empties:>4.1f}%)")
+            print(f"  в брак (вывоз)     : {scrapped:>8.0f} шт/ч  ({100*scrapped/empties:>4.1f}%)")
+            print(f"  новых КТЯ (машина) : {new_rate:>8.0f} шт/ч")
+            print(f"  баланс: реюз+новые = {supply:>6.0f} шт/ч (спрос упаковки)")
+    if written:
         print("-" * 68)
-        print("ОБОРОТ ТАРЫ (КТЯ):")
-        print(f"  вскрыто пустых КТЯ : {empties:>8.0f} шт/ч")
-        print(f"  реюз (повторно)    : {reused:>8.0f} шт/ч  ({100*reused/empties:>4.1f}%)")
-        print(f"  в брак (вывоз)     : {scrapped:>8.0f} шт/ч  ({100*scrapped/empties:>4.1f}%)")
-        print(f"  новых КТЯ (машина) : {new_rate:>8.0f} шт/ч")
-        print(f"  баланс: реюз+новые = {supply:>6.0f} шт/ч (спрос упаковки)")
+        labels = ", ".join(os.path.basename(p).replace("series_", "").replace(".csv", "")
+                           for p in written)
+        print(f"Агрегация по интервалам: {labels}")
     print(f"\nCSV сохранены в: {os.path.abspath(args.out)}")
 
 

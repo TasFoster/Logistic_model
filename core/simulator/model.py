@@ -43,6 +43,7 @@ class Entity:
     etype: str
     t_created: float
     dest: int | None = None
+    ready_at: float = 0.0     # когда доедет по ребру и станет доступна потребителю
 
 
 class Sink:
@@ -69,6 +70,9 @@ class Rib:
         self.dst = cfg["dst"]
         self.etype = cfg["etype"]
         self.capacity = cfg["capacity"]
+        # время в пути: ребро — это перемещение, а не мгновенная связь.
+        # Считается по координатам узлов и скорости транспорта (см. graph_loader).
+        self.travel = float(cfg.get("travel", 0.0))
         self.store = simpy.Store(env, capacity=self.capacity)
         self.level_samples: list[int] = []
 
@@ -153,7 +157,7 @@ class Node:
         batch = self._batch_size()
         store = self.in_stores[goods]
         while True:
-            e = yield store.get()
+            e = yield from self._take(store)
             d = e.dest if e.dest is not None else 0
             b = self.bins.setdefault(d, [])
             if not b:
@@ -194,7 +198,7 @@ class Node:
             boxes = []
             for bt in box_types:                          # плюс пустая тара
                 for _ in range(int(self.inputs[bt])):
-                    boxes.append((yield self.in_stores[bt].get()))
+                    boxes.append((yield from self._take(self.in_stores[bt])))
             self.starved += env.now - t
 
             t = env.now
@@ -262,6 +266,18 @@ class Node:
             elif state == "blocked":
                 self.blocked += dt
 
+    def _take(self, store: simpy.Store):
+        """Берёт сущность из буфера и, если она ещё в пути по ребру, ждёт прибытия.
+
+        Буфер FIFO, время в пути на ребре постоянное => голова очереди всегда
+        готова раньше остальных, поэтому ждать достаточно только её.
+        """
+        e = yield store.get()
+        dt = e.ready_at - self.env.now
+        if dt > 0:
+            yield self.env.timeout(dt)
+        return e
+
     def _gather(self):
         """Собирает нужное число входных сущностей каждого типа."""
         gathered: dict[str, list[Entity]] = {}
@@ -269,7 +285,7 @@ class Node:
             got: list[Entity] = []
             store = self.in_stores[etype]
             for _ in range(int(qty)):
-                got.append((yield store.get()))
+                got.append((yield from self._take(store)))
             gathered[etype] = got
         return gathered
 
@@ -328,6 +344,7 @@ class Node:
             if rib is None:
                 self.model.sink(e.etype).put(self.env.now, e)   # выход системы / брак
             else:
+                e.ready_at = self.env.now + rib.travel   # поедет по ребру
                 events.append(rib.store.put(e))   # ставим put в очередь, не ждём здесь
         if not events:
             return
@@ -375,6 +392,7 @@ class SortingCenterModel:
                     n.in_stores[t] = simpy.Store(self.env)
 
         self._sinks: dict[str, Sink] = {}
+        self.sink_series: list[dict[str, int]] = []   # снимки выходов по минутам
 
         self.arrival_rate_h = graph["arrival_rate_h"]
         self.start_node_id = graph.get("start_node_id")
@@ -419,7 +437,9 @@ class SortingCenterModel:
         store = target.store
         while True:
             if len(store.items) < low and len(store.items) < store.capacity:
-                yield store.put(Entity(emit, env.now))
+                e = Entity(emit, env.now)
+                e.ready_at = env.now          # машина стоит у буфера, везти не надо
+                yield store.put(e)
                 node.produced += 1
             else:
                 yield env.timeout(poll)
@@ -432,10 +452,14 @@ class SortingCenterModel:
                 r.level_samples.append(len(r.store.items))
 
     def _minute_series(self):
+        """Снимок счётчиков каждую модельную минуту — основа для агрегации
+        на интервалах 1 мин / 1 ч / 12 ч / 24 ч (требование критериев)."""
         while True:
             yield self.env.timeout(60.0)
             for n in self.nodes.values():
-                n.proc_series.append(n.processed)
+                # у source-узлов (машина новых КТЯ) счётчик — выработка, а не обработка
+                n.proc_series.append(n.produced if n.type == "source" else n.processed)
+            self.sink_series.append({k: v.count for k, v in self._sinks.items()})
 
     def _warmup_snapshot(self):
         yield self.env.timeout(self.warmup)

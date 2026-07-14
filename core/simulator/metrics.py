@@ -122,3 +122,60 @@ def find_bottleneck(m: SortingCenterModel) -> str:
     cap = best.workers * m.sim_time
     return (f"{best.name} (работа {100*best.busy/cap:.1f}% + "
             f"блокировка {100*best.blocked/cap:.1f}%)")
+
+# Интервалы агрегации из критериев задачи: 1 мин / 1 ч / 12 ч / 24 ч
+INTERVALS = [("1min", 1), ("1h", 60), ("12h", 720), ("24h", 1440)]
+
+
+def write_interval_series(m: SortingCenterModel, out_dir: str) -> list[str]:
+    """Выгружает производительность на интервалах 1 мин / 1 ч / 12 ч / 24 ч.
+
+    Критерии требуют уметь показывать результаты на этих интервалах. Счётчики
+    снимаются раз в модельную минуту, из них складываются интервалы покрупнее.
+    Пишутся только те интервалы, которые целиком укладываются в горизонт прогона.
+
+    Столбцы: interval, <узлы...>, output:<тип...> — обработано ЗА интервал, штук.
+    """
+    import os
+
+    node_names = [n.name for n in m.nodes.values()]
+    series = {n.name: n.proc_series for n in m.nodes.values()}
+    minutes = min((len(v) for v in series.values()), default=0)
+    if minutes == 0:
+        return []
+
+    # приросты по минутам: узлы
+    node_delta: dict[str, list[int]] = {}
+    for name in node_names:
+        vals, prev, out = series[name], 0, []
+        for i in range(minutes):
+            out.append(vals[i] - prev)
+            prev = vals[i]
+        node_delta[name] = out
+
+    # приросты по минутам: выходы системы
+    sink_types = sorted(m._sinks)
+    sink_delta: dict[str, list[int]] = {}
+    for st in sink_types:
+        prev, out = 0, []
+        for i in range(minutes):
+            cur = m.sink_series[i].get(st, 0) if i < len(m.sink_series) else prev
+            out.append(cur - prev)
+            prev = cur
+        sink_delta[st] = out
+
+    written = []
+    for label, size in INTERVALS:
+        if minutes < size:
+            continue                       # интервал не укладывается в горизонт
+        path = os.path.join(out_dir, f"series_{label}.csv")
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["interval"] + node_names + [f"output:{t}" for t in sink_types])
+            for start in range(0, minutes - size + 1, size):
+                row = [f"{label}#{start // size + 1}"]
+                row += [sum(node_delta[n][start:start + size]) for n in node_names]
+                row += [sum(sink_delta[t][start:start + size]) for t in sink_types]
+                w.writerow(row)
+        written.append(path)
+    return written
