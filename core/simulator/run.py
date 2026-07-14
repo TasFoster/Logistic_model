@@ -74,6 +74,23 @@ def main() -> None:
     for etype, s in sorted(model._sinks.items()):
         print(f"выход {etype:<12}: {s.count / sim_h:>10.0f} шт/ч")
 
+    # сводка по направлениям и заполняемости КТЯ
+    pack = next((n for n in model.nodes.values() if n.by_direction), None)
+    if pack is not None and model.directions is not None:
+        print("-" * 68)
+        print("НАПРАВЛЕНИЯ И ЗАПОЛНЯЕМОСТЬ КТЯ:")
+        print("  " + model.directions.describe(model.input_stream))
+        batch = pack._batch_size()
+        if pack.filled:
+            avg = pack.items_packed / pack.filled
+            share_under = 100.0 * pack.underfilled / pack.filled
+            print(f"  выпущено КТЯ       : {pack.filled / sim_h:>8.0f} шт/ч")
+            print(f"  средняя заполненность: {avg:>6.1f} из {batch} товаров "
+                  f"({100*avg/batch:.0f}%)")
+            print(f"  недозаполненных КТЯ: {share_under:>8.1f}%  "
+                  f"(закрыты по таймауту {pack.flush_timeout/60:.0f} мин)")
+        print(f"  ячеек-накопителей   : {pack.max_open_bins:>8} (пик одновременно занятых)")
+
     # сводка баланса оборота тары (если в графе есть цикл тары)
     split = next((n for n in model.nodes.values() if n.type == "split"), None)
     new_kty = sum(n.produced for n in model.nodes.values() if n.type == "source")

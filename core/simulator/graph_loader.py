@@ -153,6 +153,7 @@ def normalize(raw: dict, scenario: dict | None = None) -> dict:
         "start_node_id": raw.get("start_node_id"),
         "input_type": raw.get("type_input"),
         "input_stream": raw.get("input_stream", 100000),
+        "directions": raw.get("directions"),
     }
 
 

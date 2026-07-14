@@ -30,6 +30,7 @@ from dataclasses import dataclass
 
 import simpy
 
+from .directions import DirectionProfile
 from .graph_loader import load_json, normalize
 
 
@@ -38,9 +39,10 @@ from .graph_loader import load_json, normalize
 # ---------------------------------------------------------------------------
 @dataclass
 class Entity:
-    """Единица потока: тип + момент рождения (для расчёта времени пребывания)."""
+    """Единица потока: тип + момент рождения + направление отправки (для товаров)."""
     etype: str
     t_created: float
+    dest: int | None = None
 
 
 class Sink:
@@ -103,6 +105,18 @@ class Node:
         self.in_stores: dict[str, simpy.Store] = {}
         self._wstate: dict[int, tuple[str, float]] = {}   # состояние каждого воркера
 
+        # --- упаковка по направлениям (одна коробка = одно направление) ---
+        self.by_direction = bool(self.params.get("by_direction", False))
+        self.flush_timeout = float(self.params.get("flush_timeout_s", 0))
+        self.flush_check = float(self.params.get("flush_check_s", 60))
+        self.bins: dict[int, list[tuple[float, Entity]]] = {}   # накопитель на направление
+        self.open_bins = 0            # сколько ячеек занято сейчас
+        self.max_open_bins = 0        # пик — столько ячеек нужно физически
+        self.ready = simpy.Store(env)  # партии, готовые к упаковке
+        self.filled = 0               # выпущено КТЯ
+        self.underfilled = 0          # из них недозаполненных (закрыты по таймауту)
+        self.items_packed = 0         # товаров в них
+
         # --- статистика ---
         self.processed = 0
         self.produced = 0             # для source-узлов
@@ -116,8 +130,90 @@ class Node:
     def start(self) -> None:
         if self.type == "source":
             return                    # у source-узлов отдельный генератор
+        if self.by_direction:
+            # упаковка копит товары по направлениям: КТЯ закрывается, когда набрано
+            # batch товаров ОДНОГО направления либо истёк таймаут (недозаполненный КТЯ)
+            self.env.process(self._bin_feeder())
+            if self.flush_timeout > 0:
+                self.env.process(self._bin_flusher())
+            for wid in range(self.workers):
+                self.env.process(self._pack_worker(wid))
+            return
         for wid in range(self.workers):
             self.env.process(self._worker(wid))
+
+    # ---- накопители по направлениям ----
+    def _batch_size(self) -> int:
+        return int(self.inputs.get(self.model.goods_type, 27))
+
+    def _bin_feeder(self):
+        """Раскладывает приходящие товары по накопителям направлений."""
+        env = self.env
+        goods = self.model.goods_type
+        batch = self._batch_size()
+        store = self.in_stores[goods]
+        while True:
+            e = yield store.get()
+            d = e.dest if e.dest is not None else 0
+            b = self.bins.setdefault(d, [])
+            if not b:
+                self.open_bins += 1
+                if self.open_bins > self.max_open_bins:
+                    self.max_open_bins = self.open_bins
+            b.append((env.now, e))
+            if len(b) >= batch:
+                items = [en for _, en in b[:batch]]
+                del b[:batch]
+                if not b:
+                    self.open_bins -= 1
+                yield self.ready.put((d, items, True))     # КТЯ набран полностью
+
+    def _bin_flusher(self):
+        """Закрывает залежавшиеся накопители: хвостовые направления копятся часами,
+        их КТЯ уезжает НЕДОЗАПОЛНЕННЫМ — иначе товар не уедет никогда."""
+        env = self.env
+        while True:
+            yield env.timeout(self.flush_check)
+            now = env.now
+            for d, b in self.bins.items():
+                if b and now - b[0][0] >= self.flush_timeout:
+                    items = [en for _, en in b]
+                    b.clear()
+                    self.open_bins -= 1
+                    yield self.ready.put((d, items, False))   # КТЯ недозаполнен
+
+    def _pack_worker(self, wid: int):
+        env = self.env
+        goods = self.model.goods_type
+        box_types = [t for t in self.inputs if t != goods]
+        out_type = next(iter(self.det_out), None) or next(iter(self.outputs), "KTY_full")
+        while True:
+            t = env.now
+            self._wstate[wid] = ("starved", t)
+            d, items, full = yield self.ready.get()       # готовая партия одного направления
+            boxes = []
+            for bt in box_types:                          # плюс пустая тара
+                for _ in range(int(self.inputs[bt])):
+                    boxes.append((yield self.in_stores[bt].get()))
+            self.starved += env.now - t
+
+            t = env.now
+            self._wstate[wid] = ("busy", t)
+            yield env.timeout(self.services[wid])
+            self.busy += env.now - t
+
+            t_rep = min([e.t_created for e in items] + [b.t_created for b in boxes],
+                        default=env.now)
+            self.filled += 1
+            self.items_packed += len(items)
+            if not full:
+                self.underfilled += 1
+
+            t = env.now
+            self._wstate[wid] = ("blocked", t)
+            yield from self._emit([Entity(out_type, t_rep, dest=d)])
+            self.blocked += env.now - t
+            self.processed += 1
 
     def _worker(self, wid: int):
         env = self.env
@@ -177,15 +273,30 @@ class Node:
             gathered[etype] = got
         return gathered
 
+    def _make(self, etype: str, t_rep: float, src_dest: int | None) -> Entity:
+        """Создаёт выходную сущность, проставляя направление.
+
+        Товар РОЖДАЕТСЯ с направлением (на вскрытии КТЯ) — оно берётся из профиля
+        распределения. Дальше по цепочке направление ПЕРЕНОСИТСЯ вместе с товаром.
+        """
+        e = Entity(etype, t_rep)
+        prof = self.model.directions
+        if src_dest is not None:
+            e.dest = src_dest                                  # перенос по цепочке
+        elif prof is not None and etype == self.model.goods_type:
+            e.dest = prof.sample(self.model.rng)               # рождение товара
+        return e
+
     def _transform(self, gathered: dict[str, list[Entity]]):
         """Порождает выходные сущности по правилам outputs."""
         all_ents = [e for lst in gathered.values() for e in lst]
         t_rep = min((e.t_created for e in all_ents), default=self.env.now)
+        src_dest = next((e.dest for e in all_ents if e.dest is not None), None)
 
         # детерминированные выходы: размножение по количеству
         for etype, qty in self.det_out.items():
             for _ in range(qty):
-                yield Entity(etype, t_rep)
+                yield self._make(etype, t_rep, src_dest)
 
         # вероятностная развилка: ровно одна сущность по долям
         if self.prob_out:
@@ -197,7 +308,7 @@ class Node:
                 if r <= cum:
                     chosen = etype
                     break
-            yield Entity(chosen, t_rep)
+            yield self._make(chosen, t_rep, src_dest)
 
     def _emit(self, entities: list[Entity]):
         """Выдаёт ВСЕ выходы узла ПАРАЛЛЕЛЬНО.
@@ -235,6 +346,16 @@ class SortingCenterModel:
         self.warmup = warmup_s
         self.sample_dt = sample_dt
         self.graph = graph
+
+        # профиль направлений — создаём ДО узлов: узлы на него ссылаются
+        dcfg = graph.get("directions") or {}
+        self.goods_type = dcfg.get("entity", "Product")
+        self.directions = DirectionProfile(
+            count=dcfg.get("count", 400),
+            top_share=dcfg.get("top_share", 0.2),
+            volume_share=dcfg.get("volume_share", 0.8),
+            profile=dcfg.get("profile", "pareto"),
+        ) if dcfg else None
 
         self.nodes: dict[int, Node] = {
             nid: Node(self.env, cfg, self) for nid, cfg in graph["nodes"].items()

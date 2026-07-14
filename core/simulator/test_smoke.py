@@ -178,6 +178,52 @@ def test_time_accounting_sums_to_100():
         assert abs(total - cap) / cap < 0.01,             f"{n.name}: учтено {total:.0f} с из {cap:.0f} с — время теряется"
 
 
+def test_pareto_profile_80_20():
+    """Профиль направлений: верхние 20% забирают ~80% объёма (из постановки)."""
+    from .directions import DirectionProfile
+    prof = DirectionProfile(count=400, top_share=0.2, volume_share=0.8)
+    share = prof.share_of_top()
+    assert 0.78 < share < 0.82, f"верхние 20% дают {share:.3f} объёма, ожидалось ~0.80"
+    # длинный хвост: первое направление на порядки объёмнее последнего
+    assert prof.probs[0] / prof.probs[-1] > 100, "хвост распределения слишком плоский"
+
+
+def test_pack_one_direction_per_box():
+    """Одна коробка — одно направление: КТЯ собирается из товаров ОДНОГО направления."""
+    m = run_contract()
+    pack = next(n for n in m.nodes.values() if n.by_direction)
+    assert pack.filled > 0, "упаковка не выпустила ни одного КТЯ"
+    batch = pack._batch_size()
+    avg = pack.items_packed / pack.filled
+    assert 0 < avg <= batch, f"средняя заполненность {avg:.1f} вне диапазона 0..{batch}"
+
+
+def test_accumulator_cells_needed():
+    """Накопителей нужно примерно по одному на направление (требование к площади)."""
+    m = run_contract()
+    pack = next(n for n in m.nodes.values() if n.by_direction)
+    assert pack.max_open_bins > 300,         f"занято лишь {pack.max_open_bins} ячеек — направления не разошлись по накопителям"
+    assert pack.max_open_bins <= m.directions.count, "ячеек больше, чем направлений"
+
+
+def test_underfill_grows_when_kty_closed_early():
+    """Чем чаще закрываем КТЯ, тем больше недозаполненных — и тем больше расход тары.
+    Это ключевой компромисс отчёта, он должен воспроизводиться."""
+    import copy
+    from .graph_loader import load_json, normalize
+    raw = load_json(os.path.join(os.path.dirname(__file__), "graph_contract.json"))
+
+    def run(tmo):
+        r = copy.deepcopy(raw)
+        r["nodes"]["node4"]["params"]["flush_timeout_s"] = tmo
+        m = SortingCenterModel(normalize(r), seed=42, warmup_s=300.0).run(hours=2)
+        p = next(n for n in m.nodes.values() if n.by_direction)
+        return 100.0 * p.underfilled / max(p.filled, 1)
+
+    fast, slow = run(900), run(3600)     # 15 мин против 60 мин
+    assert fast > slow + 5,         f"недозаполненность не растёт при раннем закрытии КТЯ ({fast:.1f}% vs {slow:.1f}%)"
+
+
 def _main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

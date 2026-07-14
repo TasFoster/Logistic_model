@@ -41,8 +41,10 @@
             "id": 4,
             "name": "Pack",
             "type_node": "pack",
+            "_note": "Одна коробка — одно направление: упаковка копит 27 товаров ОДНОГО направления. Если направление вялое и КТЯ не набрался за flush_timeout_s, он уезжает недозаполненным (иначе товар не уедет никогда).",
             "input":  {"Product": 27, "Box": 1},
             "output": {"KTY_full": 1},
+            "params": {"by_direction": true, "flush_timeout_s": 3600, "flush_check_s": 60},
             "effecive_ellements": [
                 {"name": "mashin", "ef": 1500}, {"name": "mashin", "ef": 1500},
                 {"name": "mashin", "ef": 1500}, {"name": "mashin", "ef": 1500}
@@ -100,6 +102,15 @@
         "rib5": {"node_in_id": 2, "node_out_id": 6, "storage":  500, "type_el": "Box"},
         "rib6": {"node_in_id": 6, "node_out_id": 4, "storage":  500, "type_el": "Box"},
         "rib7": {"node_in_id": 6, "node_out_id": 7, "storage":  500, "type_el": "BoxBrak"}
+    },
+
+    "directions": {
+        "_note": "400 направлений отправки. Неравнозначны: верхние 20% забирают 80% объёма (из постановки). Степенной закон даёт длинный хвост — у последних направлений единицы товаров в час.",
+        "count": 400,
+        "entity": "Product",
+        "profile": "pareto",
+        "top_share": 0.2,
+        "volume_share": 0.8
     },
 
     "input_stream": 100000,
