@@ -1,0 +1,110 @@
+{
+    "_comment": "Граф сортировочного центра в формате общего контракта (как config/example_graph.json), но с реальными мощностями под 100 000 товаров/ч и замкнутым оборотом тары. effecive_ellements[].ef — ПРОИЗВОДИТЕЛЬНОСТЬ единицы ресурса, шт/ч; время обработки = 3600/ef. Предложение к обсуждению: узлы 6-8 закрывают проблему излишков пустой тары (см. core/simulator/README.md).",
+
+    "nodes": {
+        "node1": {
+            "id": 1,
+            "name": "Depaletizciya",
+            "type_node": "Input",
+            "input":  {"Palet": 1},
+            "output": {"KTY": 20},
+            "effecive_ellements": [{"name": "people", "ef": 250}],
+            "pos": {"x": 1, "y": 2}, "scale": {"width": 100, "height": 100}
+        },
+        "node2": {
+            "id": 2,
+            "name": "unKTU",
+            "type_node": "transform",
+            "input":  {"KTY": 1},
+            "output": {"Product": 27, "Box": 1},
+            "effecive_ellements": [{"name": "mashin", "ef": 4000}],
+            "pos": {"x": 2, "y": 2}, "scale": {"width": 100, "height": 100}
+        },
+        "node3": {
+            "id": 3,
+            "name": "Sorting",
+            "type_node": "sort",
+            "input":  {"Product": 1},
+            "output": {"Product": 0.95, "Nonsort": 0.05},
+            "_note": "11 сортировщиков по 10 000 товаров/ч (из постановки задачи)",
+            "effecive_ellements": [
+                {"name": "sorter", "ef": 10000}, {"name": "sorter", "ef": 10000},
+                {"name": "sorter", "ef": 10000}, {"name": "sorter", "ef": 10000},
+                {"name": "sorter", "ef": 10000}, {"name": "sorter", "ef": 10000},
+                {"name": "sorter", "ef": 10000}, {"name": "sorter", "ef": 10000},
+                {"name": "sorter", "ef": 10000}, {"name": "sorter", "ef": 10000},
+                {"name": "sorter", "ef": 10000}
+            ],
+            "pos": {"x": 3, "y": 2}, "scale": {"width": 100, "height": 100}
+        },
+        "node4": {
+            "id": 4,
+            "name": "Pack",
+            "type_node": "pack",
+            "input":  {"Product": 27, "Box": 1},
+            "output": {"KTY_full": 1},
+            "effecive_ellements": [
+                {"name": "mashin", "ef": 1500}, {"name": "mashin", "ef": 1500},
+                {"name": "mashin", "ef": 1500}, {"name": "mashin", "ef": 1500}
+            ],
+            "pos": {"x": 4, "y": 2}, "scale": {"width": 100, "height": 100}
+        },
+        "node5": {
+            "id": 5,
+            "name": "StorageNonsort",
+            "type_node": "Storage",
+            "input":  {"Nonsort": 1},
+            "output": {},
+            "effecive_ellements": [],
+            "pos": {"x": 4, "y": 4}, "scale": {"width": 100, "height": 100}
+        },
+
+        "node6": {
+            "id": 6,
+            "name": "TareSplit",
+            "_note": "НОВЫЙ УЗЕЛ: развилка пустой тары — 80% на повторное использование, 20% в брак. Без него излишки коробов копятся и запирают вскрытие.",
+            "type_node": "split",
+            "input":  {"Box": 1},
+            "output": {"Box": 0.8, "BoxBrak": 0.2},
+            "effecive_ellements": [{"name": "mashin", "ef": 5000}],
+            "pos": {"x": 2, "y": 4}, "scale": {"width": 100, "height": 100}
+        },
+        "node7": {
+            "id": 7,
+            "name": "StorageBrak",
+            "_note": "НОВЫЙ УЗЕЛ: сток брака тары (вывоз повреждённых коробов).",
+            "type_node": "Storage",
+            "input":  {"BoxBrak": 1},
+            "output": {},
+            "effecive_ellements": [],
+            "pos": {"x": 1, "y": 5}, "scale": {"width": 100, "height": 100}
+        },
+        "node8": {
+            "id": 8,
+            "name": "MashinaNovyhKTY",
+            "_note": "НОВЫЙ УЗЕЛ: машина новых КТЯ. Восполняет дефицит тары в буфере rib6; выработка эмерджентна (спрос упаковки минус повторно используемые короба).",
+            "type_node": "source",
+            "input":  {},
+            "output": {"Box": 1},
+            "params": {"emit_type": "Box", "target_rib": "rib6", "low": 100, "poll": 1.0},
+            "effecive_ellements": [{"name": "mashin", "ef": 2000}],
+            "pos": {"x": 3, "y": 5}, "scale": {"width": 100, "height": 100}
+        }
+    },
+
+    "ribs": {
+        "rib1": {"node_in_id": 1, "node_out_id": 2, "storage":  500, "type_el": "KTY"},
+        "rib2": {"node_in_id": 2, "node_out_id": 3, "storage": 2000, "type_el": "Product"},
+        "rib3": {"node_in_id": 3, "node_out_id": 4, "storage": 2000, "type_el": "Product"},
+        "rib4": {"node_in_id": 3, "node_out_id": 5, "storage":  500, "type_el": "Nonsort"},
+        "rib5": {"node_in_id": 2, "node_out_id": 6, "storage":  500, "type_el": "Box"},
+        "rib6": {"node_in_id": 6, "node_out_id": 4, "storage":  500, "type_el": "Box"},
+        "rib7": {"node_in_id": 6, "node_out_id": 7, "storage":  500, "type_el": "BoxBrak"}
+    },
+
+    "input_stream": 100000,
+    "type_input": "Palet",
+    "start_node_id": 1,
+    "type_output": "KTY_full",
+    "end_node_id": 4
+}

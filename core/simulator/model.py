@@ -84,7 +84,11 @@ class Node:
         self.inputs: dict[str, float] = cfg["inputs"]     # {тип: сколько нужно}
         self.outputs: dict[str, float] = cfg["outputs"]   # {тип: кол-во или доля}
         self.workers = cfg["workers"]
-        self.service = cfg["service"]
+        # у каждого исполнителя своя скорость: service = 3600 / ef (ef — производительность)
+        self.services: list[float] = list(cfg["services"])
+        if len(self.services) < self.workers:
+            self.services += [self.services[-1]] * (self.workers - len(self.services))
+        self.capacity_per_h = sum(3600.0 / s for s in self.services if s > 0)
         self.params = cfg.get("params", {})
 
         # разделяем выходы на детерминированные (>=1) и вероятностные доли (<1)
@@ -129,10 +133,10 @@ class Node:
                 inputs = yield from self._gather()
             self.starved += env.now - t
 
-            # 2) обработка
+            # 2) обработка (у каждого исполнителя своя скорость)
             t = env.now
             self._wstate[wid] = ("busy", t)
-            yield env.timeout(self.service)
+            yield env.timeout(self.services[wid])
             self.busy += env.now - t
 
             # 3) выдача выходов (блокировка, если буфер полон)

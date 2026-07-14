@@ -69,16 +69,23 @@ def _node_outputs(n: dict) -> dict[str, float]:
     return {t: (kof[i] if i < len(kof) else 1) for i, t in enumerate(outs)}
 
 
-def _node_workers(n: dict) -> int:
-    """Число параллельных исполнителей узла.
+def _node_resources(n: dict) -> tuple[int, list[float]]:
+    """Ресурсы узла -> (число параллельных исполнителей, время обработки каждого).
 
-    ДОПУЩЕНИЕ: effecive_ellements[].ef трактуется как КОЛИЧЕСТВО единиц ресурса
-    (людей/машин), а не как производительность. Это неоднозначность контракта —
-    вынесена на согласование (см. README, 'Пробелы схемы').
+    effecive_ellements[].ef — ПРОИЗВОДИТЕЛЬНОСТЬ единицы ресурса в штуках в час.
+    Отсюда время обработки одной сущности этой единицей:  service = 3600 / ef.
+    Каждый элемент списка — отдельный параллельный исполнитель со своей скоростью,
+    поэтому суммарная пропускная способность узла = sum(ef) шт/ч.
+
+    Узел без ресурсов (например, Storage) считается мгновенным (service = 0):
+    он ничего не обрабатывает, а только принимает — иначе давал бы ложное узкое место.
     """
     elems = n.get("effecive_ellements") or []
-    total = sum(int(e.get("ef", 1)) for e in elems)
-    return total or 1
+    rates = [float(e.get("ef", 0)) for e in elems]
+    rates = [r for r in rates if r > 0]
+    if not rates:
+        return 1, [0.0]
+    return len(rates), [3600.0 / r for r in rates]
 
 
 def _ribs(raw: dict) -> list[dict]:
@@ -104,17 +111,30 @@ def normalize(raw: dict, scenario: dict | None = None) -> dict:
     nodes: dict[int, dict] = {}
     for n in (raw.get("nodes") or {}).values():
         ntype = n.get("type_node", "transform")
-        service = n.get("service_time_s")           # если время всё же есть в графе
-        if service is None:
-            service = times_by_name.get(n["name"], times_by_type.get(ntype, default_service))
+        workers, services = _node_resources(n)
+
+        # Явное время в узле или в сценарии перекрывает расчёт из производительности.
+        # Нужно для ранних графов прототипа (graph_mini/graph_tare) и для сценариев
+        # «а что, если узел станет медленнее» (отказ оборудования и т.п.).
+        override = n.get("service_time_s")
+        if override is None:
+            override = times_by_name.get(n["name"], times_by_type.get(ntype))
+        if override is None and not (n.get("effecive_ellements") or []):
+            override = default_service if ntype not in ("Storage", "source") else None
+        if override is not None:
+            # при явном времени ef снова означает число параллельных единиц
+            elems = n.get("effecive_ellements") or []
+            workers = sum(int(e.get("ef", 1)) for e in elems) or 1
+            services = [float(override)] * workers
+
         nodes[n["id"]] = {
             "id": n["id"],
             "name": n["name"],
             "type": ntype,
             "inputs": _node_inputs(n),
             "outputs": _node_outputs(n),
-            "workers": _node_workers(n),
-            "service": float(service),
+            "workers": workers,
+            "services": services,
             "params": n.get("params", {}),
             "pos": n.get("pos", {}),
         }

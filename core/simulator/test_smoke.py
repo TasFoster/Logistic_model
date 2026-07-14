@@ -106,20 +106,61 @@ def test_pack_assembly_ratio():
     assert abs(pack.processed - kty_out.count) / max(pack.processed, 1) < 0.05
 
 
-def run_contract(hours: float = 1.0) -> SortingCenterModel:
-    """Граф из общего контракта (config/example_graph.json) + слой времён."""
-    root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    graph = load_graph(os.path.join(root, "config", "example_graph.json"),
-                       os.path.join(os.path.dirname(__file__), "scenario_example.json"))
+def run_contract(hours: float = 2.0) -> SortingCenterModel:
+    """Эталонный граф в формате контракта: реальные мощности + оборот тары."""
+    graph = load_graph(os.path.join(os.path.dirname(__file__), "graph_contract.json"))
     return SortingCenterModel(graph, seed=42, warmup_s=300.0).run(hours=hours)
 
 
-def test_contract_graph_runs():
-    """Модель читает граф общего контракта и прогоняет его."""
+def test_example_format_loads():
+    """Пример формата (config/example_graph.json) читается, время выводится из ef.
+
+    ef — производительность, шт/ч => время обработки = 3600 / ef.
+    Для Sorting в примере ef=24 => 150 с на товар.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    g = load_graph(os.path.join(root, "config", "example_graph.json"))
+    assert len(g["nodes"]) == 5, "не все узлы примера загружены"
+    sorting = next(c for c in g["nodes"].values() if c["name"] == "Sorting")
+    assert abs(sorting["services"][0] - 150.0) < 0.01,         f"время сортировки {sorting['services'][0]} != 3600/24"
+    pack = next(c for c in g["nodes"].values() if c["name"] == "Pack")
+    assert pack["inputs"] == {"Product": 27, "Box": 1}, "сборка на упаковке не разобрана"
+
+
+def test_contract_reaches_target_throughput():
+    """Эталонный граф вытягивает целевые 100 000 товаров/ч на сортировке."""
     m = run_contract()
-    assert len(m.nodes) == 5, "не все узлы контрактного графа загружены"
-    assert m.generated > 0, "входной поток не подан"
-    assert any(n.processed > 0 for n in m.nodes.values()), "ни один узел не сработал"
+    sort = next(n for n in m.nodes.values() if n.type == "sort")
+    win_h = (m.sim_time - m.warmup) / 3600.0
+    thr = (sort.processed - sort.processed_at_warmup) / win_h
+    assert 97000 < thr < 103000, f"сортировка {thr:.0f} товаров/ч, ожидалось ~100 000"
+
+
+def test_contract_no_tare_jam():
+    """Излишки тары не запирают линию: вскрытие не блокируется.
+
+    Ловит структурную проблему примера: без развилки тары короба копятся,
+    буфер забивается и вскрытие встаёт (блокировка была 44.7%).
+    """
+    m = run_contract()
+    unpack = next(n for n in m.nodes.values() if n.name == "unKTU")
+    blocked = 100.0 * unpack.blocked / (unpack.workers * m.sim_time)
+    assert blocked < 5.0, f"вскрытие заблокировано на {blocked:.1f}% — затор по таре"
+
+
+def test_contract_tare_balance():
+    """Баланс тары: реюз + новые КТЯ ≈ спрос упаковки."""
+    m = run_contract()
+    split = next(n for n in m.nodes.values() if n.type == "split")
+    pack = next(n for n in m.nodes.values() if n.type == "pack")
+    src = next(n for n in m.nodes.values() if n.type == "source")
+    brak = m._sinks.get("BoxBrak") or next(
+        (n for n in m.nodes.values() if n.name == "StorageBrak"), None)
+    scrapped = brak.processed if hasattr(brak, "processed") else brak.count
+    reused = split.processed - scrapped
+    supply, demand = reused + src.produced, pack.processed
+    assert src.produced > 0, "машина новых КТЯ не включилась"
+    assert abs(supply - demand) / max(demand, 1) < 0.05,         f"баланс тары не сходится: спрос {demand}, поставка {supply}"
 
 
 def test_time_accounting_sums_to_100():
@@ -134,20 +175,7 @@ def test_time_accounting_sums_to_100():
             continue
         cap = n.workers * m.sim_time
         total = n.busy + n.blocked + n.starved
-        assert abs(total - cap) / cap < 0.01, \
-            f"{n.name}: учтено {total:.0f} с из {cap:.0f} с — время теряется"
-
-
-def test_no_deadlock_on_contract_graph():
-    """Система не встаёт колом: узел вскрытия реально обрабатывает КТЯ.
-
-    Ловит регресс к последовательной выдаче выходов, при которой затор на ленте
-    товаров не давал отдать пустой короб, а упаковка без короба не разбирала товары.
-    """
-    m = run_contract()
-    unpack = next(n for n in m.nodes.values() if n.name == "unKTU")
-    assert unpack.processed > 500, \
-        f"вскрытие обработало всего {unpack.processed} КТЯ за час — похоже на взаимоблокировку"
+        assert abs(total - cap) / cap < 0.01,             f"{n.name}: учтено {total:.0f} с из {cap:.0f} с — время теряется"
 
 
 def _main():
