@@ -121,7 +121,7 @@ HTML = """<meta charset="utf-8">
   .card .v{font-size:20px;font-weight:600;margin-top:2px}
   .plan{background:var(--card);border:1px solid var(--line);border-radius:10px;
         padding:12px;overflow-x:auto}
-  svg{display:block;min-width:900px}
+  svg{display:block;min-width:900px;width:100%;height:auto}
   .legend{display:flex;gap:18px;flex-wrap:wrap;color:var(--mut);
           font-size:12px;margin-top:12px}
   .sw{display:inline-block;width:12px;height:12px;border-radius:3px;
@@ -167,9 +167,27 @@ document.getElementById('cards').innerHTML = cards.map(([k,v]) =>
   `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
 
 // --- геометрия ---
-const W = 1180, H = 620, PAD = 70;
+// Высота холста считается от плотности узлов: в колонке 2-й стадии их 20, и при
+// фиксированной высоте блоки наезжали друг на друга.
+const NH = 34, GAP = 8, PAD = 70, W = 1180;
 const xs = N.map(n=>n.x), ys = N.map(n=>n.y);
 const x0=Math.min(...xs), x1=Math.max(...xs), y0=Math.min(...ys), y1=Math.max(...ys);
+
+// Высота: самая плотная колонка занимает лишь ЧАСТЬ вертикального диапазона
+// (ниже неё есть другие узлы), поэтому холст растягиваем с учётом этой доли —
+// иначе блоков в колонке не хватает места и они наезжают.
+const cols = {};
+for (const n of N) { const k = n.x.toFixed(2); (cols[k] = cols[k] || []).push(n); }
+const span = y1 - y0 || 1;
+let need = 620;
+for (const c of Object.values(cols)) {
+  if (c.length < 2) continue;
+  const cy = c.map(n => n.y);
+  const frac = Math.max((Math.max(...cy) - Math.min(...cy)) / span, 1e-6);
+  need = Math.max(need, c.length * (NH + GAP) / frac + 2 * PAD);
+}
+const H = Math.ceil(need);
+
 const sx = v => PAD + (x1===x0?0.5:(v-x0)/(x1-x0)) * (W-2*PAD);
 const sy = v => PAD + (y1===y0?0.5:(v-y0)/(y1-y0)) * (H-2*PAD);
 
@@ -190,20 +208,22 @@ for (const r of R) {
   const w = 1 + 7 * Math.sqrt(r.flow / maxFlow);
   const col = r.fill > 95 ? '#ea4335' : r.fill > 60 ? '#fbbc04' : '#8ab4f8';
   const op  = r.fill > 95 ? 0.95 : 0.5;
-  out += `<line x1="${sx(a.x)}" y1="${sy(a.y)}" x2="${sx(b.x)}" y2="${sy(b.y)}"
+  const HW = 74;                                  // половина ширины блока
+  const ax = sx(a.x) + (sx(b.x) > sx(a.x) ? HW : -HW);
+  const bx = sx(b.x) + (sx(b.x) > sx(a.x) ? -HW : HW);
+  out += `<line x1="${ax}" y1="${sy(a.y)}" x2="${bx}" y2="${sy(b.y)}"
     stroke="${col}" stroke-width="${w.toFixed(1)}" opacity="${op}"
     data-tip="${r.etype}: ${r.flow.toLocaleString('ru')} шт/ч&#10;буфер ${r.fill}% (ёмкость ${r.cap})&#10;в пути ${r.travel} с"/>`;
 }
-// узлы
+// узлы: имя и поток в одну строку — так влезают все 20 секций без наложения
 for (const n of N) {
-  const w = 104, h = 40, x = sx(n.x)-w/2, y = sy(n.y)-h/2;
+  const w = 148, h = NH, x = sx(n.x)-w/2, y = sy(n.y)-h/2;
   const stroke = n.down>1 ? '#fff' : n.blocked>20 ? '#ea4335' : 'transparent';
-  const short = n.name.length>13 ? n.name.slice(0,12)+'…' : n.name;
   out += `<g data-tip="${n.name} (${n.type})&#10;поток ${n.thr.toLocaleString('ru')} шт/ч из ${n.capacity.toLocaleString('ru')} шт/ч&#10;работа ${n.busy}% · блокировка ${n.blocked}%&#10;голодание ${n.starved}% · отказ ${n.down}%">
-    <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8"
+    <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="7"
       fill="${heat(n)}" stroke="${stroke}" stroke-width="2"/>
-    <text x="${sx(n.x)}" y="${sy(n.y)-2}" text-anchor="middle" fill="#fff" font-weight="600">${short}</text>
-    <text x="${sx(n.x)}" y="${sy(n.y)+12}" text-anchor="middle" fill="#fff" opacity=".85">${n.thr.toLocaleString('ru')}/ч</text>
+    <text x="${x+9}" y="${sy(n.y)+4}" fill="#fff" font-weight="600">${n.name}</text>
+    <text x="${x+w-9}" y="${sy(n.y)+4}" text-anchor="end" fill="#fff" opacity=".85">${n.thr.toLocaleString('ru')}/ч</text>
   </g>`;
 }
 svg.innerHTML = out;
