@@ -81,6 +81,7 @@ class Rib:
         # может быть много — 20 секций 2-й стадии кормят одну упаковку)
         self.store: simpy.Store | None = None
         self.level_samples: list[int] = []
+        self.passed = 0               # сколько сущностей прошло по ребру (для схемы потоков)
 
 
 # ---------------------------------------------------------------------------
@@ -127,12 +128,17 @@ class Node:
         self.underfilled = 0          # из них недозаполненных (закрыты по таймауту)
         self.items_packed = 0         # товаров в них
 
+        # --- отказ оборудования (сценарии) ---
+        self.up = True                 # узел работоспособен
+        self._up_event = env.event()   # событие «узел снова в строю»
+
         # --- статистика ---
         self.processed = 0
         self.produced = 0             # для source-узлов
         self.busy = 0.0               # время обработки
         self.blocked = 0.0            # ожидание на полном выходном буфере
         self.starved = 0.0            # ожидание входных сущностей (нехватка входа)
+        self.down = 0.0               # простой из-за отказа узла
         self.processed_at_warmup = 0
         self.busy_at_warmup = 0.0
         self.proc_series: list[int] = []
@@ -207,6 +213,13 @@ class Node:
                     boxes.append((yield from self._take(self.in_stores[bt])))
             self.starved += env.now - t
 
+            if not self.up:                      # отказ узла
+                t = env.now
+                self._wstate[wid] = ("down", t)
+                while not self.up:
+                    yield self._up_event
+                self.down += env.now - t
+
             t = env.now
             self._wstate[wid] = ("busy", t)
             yield env.timeout(self.services[wid])
@@ -239,7 +252,15 @@ class Node:
                 inputs = yield from self._gather()
             self.starved += env.now - t
 
-            # 2) обработка (у каждого исполнителя своя скорость)
+            # 2) отказ узла: пока не починят, обработка не идёт
+            if not self.up:
+                t = env.now
+                self._wstate[wid] = ("down", t)
+                while not self.up:
+                    yield self._up_event
+                self.down += env.now - t
+
+            # 3) обработка (у каждого исполнителя своя скорость)
             t = env.now
             self._wstate[wid] = ("busy", t)
             yield env.timeout(self.services[wid])
@@ -271,6 +292,8 @@ class Node:
                 self.busy += dt
             elif state == "blocked":
                 self.blocked += dt
+            elif state == "down":
+                self.down += dt
 
     def _take(self, store: simpy.Store):
         """Берёт сущность из буфера и, если она ещё в пути по ребру, ждёт прибытия.
@@ -351,6 +374,7 @@ class Node:
                 self.model.sink(e.etype).put(self.env.now, e)   # выход системы / брак
             else:
                 e.ready_at = self.env.now + rib.travel   # поедет по ребру
+                rib.passed += 1
                 events.append(rib.store.put(e))   # ставим put в очередь, не ждём здесь
         if not events:
             return
@@ -362,8 +386,11 @@ class Node:
 # ---------------------------------------------------------------------------
 class SortingCenterModel:
     def __init__(self, graph: dict, seed: int = 42, warmup_s: float = 300.0,
-                 sample_dt: float = 5.0):
-        """graph — КАНОНИЧЕСКИЙ граф (см. graph_loader.normalize)."""
+                 sample_dt: float = 5.0, outages: list[dict] | None = None):
+        """graph — КАНОНИЧЕСКИЙ граф (см. graph_loader.normalize).
+
+        outages — отказы оборудования: [{"node": имя, "start_h": ч, "duration_h": ч}].
+        """
         self.env = simpy.Environment()
         self.rng = random.Random(seed)
         self.warmup = warmup_s
@@ -424,6 +451,7 @@ class SortingCenterModel:
         self.input_type = graph.get("input_type")
         self.input_stream = graph.get("input_stream", 100000)
         self.generated = 0
+        self.outages = outages or []
         self.sim_time = 0.0
 
     def find_rib(self, src_id: int, etype: str, dest: int | None = None) -> Rib | None:
@@ -489,6 +517,17 @@ class SortingCenterModel:
             else:
                 yield env.timeout(poll)
 
+    # ---- отказ оборудования ----
+    def _outage(self, node: "Node", start_s: float, duration_s: float):
+        """Узел выходит из строя на интервале и потом возвращается в строй."""
+        env = self.env
+        yield env.timeout(start_s)
+        node.up = False
+        yield env.timeout(duration_s)
+        node.up = True
+        ev, node._up_event = node._up_event, env.event()
+        ev.succeed()                     # будим всех, кто ждал починки
+
     # ---- мониторы ----
     def _sampler(self):
         # рёбра могут делить общий буфер — семплируем каждый буфер один раз
@@ -523,6 +562,12 @@ class SortingCenterModel:
         for n in self.nodes.values():
             if n.type == "source":
                 self.env.process(self._tare_source(n))
+        for o in self.outages:
+            target = next((n for n in self.nodes.values() if n.name == o["node"]), None)
+            if target is not None:
+                self.env.process(self._outage(
+                    target, float(o.get("start_h", 0)) * 3600.0,
+                    float(o.get("duration_h", 0)) * 3600.0))
         self.env.process(self._sampler())
         self.env.process(self._minute_series())
         self.env.process(self._warmup_snapshot())

@@ -174,8 +174,9 @@ def test_time_accounting_sums_to_100():
         if n.type == "source":
             continue
         cap = n.workers * m.sim_time
-        total = n.busy + n.blocked + n.starved
-        assert abs(total - cap) / cap < 0.01,             f"{n.name}: учтено {total:.0f} с из {cap:.0f} с — время теряется"
+        total = n.busy + n.blocked + n.starved + n.down
+        assert abs(total - cap) / cap < 0.01, \
+            f"{n.name}: учтено {total:.0f} с из {cap:.0f} с — время теряется"
 
 
 def test_pareto_profile_80_20():
@@ -274,6 +275,59 @@ def test_sequential_grouping_is_worse():
         "при группировке подряд первая стадия должна блокироваться"
     assert sort1_blocked(bal) < 0.05, \
         "при балансировке первая стадия блокироваться не должна"
+
+
+# ---------------------------------------------------------------------------
+# Сценарии: пик, отказ узла, рост nonsort
+# ---------------------------------------------------------------------------
+def _sc(sc: dict, hours: float = 2.0):
+    from .graph_loader import load_json
+    from .scenarios import run_scenario
+    raw = load_json(os.path.join(os.path.dirname(__file__), "graph_2stage.json"))
+    return run_scenario(raw, dict(sc, name=sc.get("name", "x")), hours, 42, 600.0)
+
+
+def test_outage_cuts_output():
+    """Отказ узла режет выход центра — сценарий действительно бьёт по системе."""
+    base = _sc({"name": "Номинал"})
+    down = _sc({"name": "Отказ", "outages": [
+        {"node": "unKTU", "start_h": 0.5, "duration_h": 0.5}]})
+    assert down["out_kty_per_h"] < base["out_kty_per_h"] * 0.95, \
+        f"отказ вскрытия не снизил выход: {down['out_kty_per_h']:.0f} против {base['out_kty_per_h']:.0f}"
+
+
+def test_outage_time_is_accounted():
+    """Простой из-за отказа попадает в отдельную метрику down, а не теряется."""
+    from .graph_loader import load_json, normalize
+    from .model import SortingCenterModel
+    raw = load_json(os.path.join(os.path.dirname(__file__), "graph_2stage.json"))
+    m = SortingCenterModel(normalize(raw), seed=42, warmup_s=600.0, outages=[
+        {"node": "unKTU", "start_h": 0.5, "duration_h": 0.5}]).run(hours=2.0)
+    n = next(x for x in m.nodes.values() if x.name == "unKTU")
+    cap = n.workers * m.sim_time
+    down = 100.0 * n.down / cap
+    assert 20.0 < down < 30.0, f"простой из-за отказа {down:.1f}%, ожидалось ~25% (0.5 ч из 2 ч)"
+    total = n.busy + n.blocked + n.starved + n.down
+    assert abs(total - cap) / cap < 0.01, "с отказом учёт времени перестал сходиться в 100%"
+
+
+def test_peak_saturates_not_scales():
+    """Пиковая нагрузка НЕ увеличивает выход (центр упирается в потолок), но
+    резко раздувает время пребывания товара — это очередь, а не пропускная способность."""
+    base = _sc({"name": "Номинал"})
+    peak = _sc({"name": "Пик", "input_stream_factor": 1.5})
+    assert peak["out_kty_per_h"] < base["out_kty_per_h"] * 1.15, \
+        "при пике выход вырос — значит запас мощности был, проверь размерение узлов"
+    assert peak["residence_min"] > base["residence_min"] * 1.5, \
+        "при пике время пребывания не выросло — очередь не копится, что подозрительно"
+
+
+def test_nonsort_growth_cuts_output():
+    """Рост доли nonsort снижает выход упакованных КТЯ."""
+    base = _sc({"name": "Номинал"})
+    ns = _sc({"name": "nonsort 15%", "nonsort_share": 0.15})
+    assert ns["out_kty_per_h"] < base["out_kty_per_h"], \
+        "рост nonsort не снизил выход КТЯ"
 
 
 def _main():

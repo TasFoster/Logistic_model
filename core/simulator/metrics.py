@@ -46,11 +46,13 @@ def collect_rows(m: SortingCenterModel) -> list[dict]:
         utilization = 100.0 * n.busy / capacity_time if capacity_time > 0 else 0.0
         blocked = 100.0 * n.blocked / capacity_time if capacity_time > 0 else 0.0
         starved = 100.0 * n.starved / capacity_time if capacity_time > 0 else 0.0
+        down = 100.0 * n.down / capacity_time if capacity_time > 0 else 0.0
 
         add(n.name, "throughput", throughput, "шт/ч")
         add(n.name, "utilization", utilization, "%")
         add(n.name, "blocked", blocked, "%")
         add(n.name, "starved", starved, "%")
+        add(n.name, "down", down, "%")
         add(n.name, "workers", n.workers, "шт")
 
     # ---- по рёбрам (буферам) ----
@@ -60,7 +62,9 @@ def collect_rows(m: SortingCenterModel) -> list[dict]:
             max_lvl = max(r.level_samples)
         else:
             mean_lvl = max_lvl = 0
-        fill = 100.0 * max_lvl / r.capacity if r.capacity else 0.0
+        # ёмкость берём у РЕАЛЬНОГО буфера: рёбра могут делить общий (20 секций -> упаковка)
+        cap = r.store.capacity if r.store is not None else r.capacity
+        fill = 100.0 * max_lvl / cap if cap else 0.0
         add(f"{r.name}({r.src}->{r.dst},{r.etype})", "queue_mean", float(mean_lvl), "шт")
         add(f"{r.name}({r.src}->{r.dst},{r.etype})", "queue_max", max_lvl, "шт")
         add(f"{r.name}({r.src}->{r.dst},{r.etype})", "buffer_fill_max", fill, "%")
