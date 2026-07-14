@@ -224,6 +224,58 @@ def test_underfill_grows_when_kty_closed_early():
     assert fast > slow + 5,         f"недозаполненность не растёт при раннем закрытии КТЯ ({fast:.1f}% vs {slow:.1f}%)"
 
 
+# ---------------------------------------------------------------------------
+# Двухстадийная сортировка 20 x 20
+# ---------------------------------------------------------------------------
+def run_2stage(hours: float = 2.0, grouping: str | None = None) -> SortingCenterModel:
+    import copy
+    from .graph_loader import load_json, normalize
+    raw = load_json(os.path.join(os.path.dirname(__file__), "graph_2stage.json"))
+    if grouping:
+        raw = copy.deepcopy(raw)
+        raw["directions"]["grouping"] = grouping
+    return SortingCenterModel(normalize(raw), seed=42, warmup_s=600.0).run(hours=hours)
+
+
+def test_two_stage_all_sections_work():
+    """Все 20 секций второй стадии реально работают — маршрутизация по группам жива."""
+    m = run_2stage()
+    secs = [n for n in m.nodes.values() if n.name.startswith("Sort2_")]
+    assert len(secs) == 20, f"секций {len(secs)}, ожидалось 20"
+    idle = [n.name for n in secs if n.processed == 0]
+    assert not idle, f"секции без единого товара: {idle}"
+
+
+def test_two_stage_balanced_load():
+    """При балансировке групп секции загружены сопоставимо (разброс не в разы)."""
+    m = run_2stage(grouping="balanced")
+    secs = [n for n in m.nodes.values() if n.name.startswith("Sort2_")]
+    loads = [n.busy / (n.workers * m.sim_time) for n in secs]
+    assert max(loads) / max(min(loads), 1e-9) < 2.0, \
+        f"разброс загрузки секций {max(loads)/min(loads):.1f}x — балансировка не работает"
+
+
+def test_sequential_grouping_is_worse():
+    """Наивная группировка подряд из-за Парето перегружает первые секции и душит
+    первую стадию. Это ключевой вывод по двухстадийной схеме — он должен воспроизводиться."""
+    bal = run_2stage(grouping="balanced")
+    seq = run_2stage(grouping="sequential")
+
+    def out(m):
+        return next(n for n in m.nodes.values() if n.by_direction).filled
+
+    def sort1_blocked(m):
+        n = next(x for x in m.nodes.values() if x.name == "Sort1")
+        return n.blocked / (n.workers * m.sim_time)
+
+    assert out(bal) > out(seq) * 1.5, \
+        f"балансировка не даёт выигрыша: {out(bal)} против {out(seq)}"
+    assert sort1_blocked(seq) > 0.2, \
+        "при группировке подряд первая стадия должна блокироваться"
+    assert sort1_blocked(bal) < 0.05, \
+        "при балансировке первая стадия блокироваться не должна"
+
+
 def _main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

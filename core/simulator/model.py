@@ -73,7 +73,13 @@ class Rib:
         # время в пути: ребро — это перемещение, а не мгновенная связь.
         # Считается по координатам узлов и скорости транспорта (см. graph_loader).
         self.travel = float(cfg.get("travel", 0.0))
-        self.store = simpy.Store(env, capacity=self.capacity)
+        # группа направлений, которую несёт это ребро (двухстадийная сортировка):
+        # ребро от сортировщика 1-й стадии к своей секции 2-й стадии
+        self.dest_group = cfg.get("dest_group")
+        # store назначается моделью: рёбра, ведущие в ОДИН узел с ОДНИМ типом
+        # сущности, делят общий буфер (у узла один вход на тип, но поставщиков
+        # может быть много — 20 секций 2-й стадии кормят одну упаковку)
+        self.store: simpy.Store | None = None
         self.level_samples: list[int] = []
 
 
@@ -340,7 +346,7 @@ class Node:
         """
         events = []
         for e in entities:
-            rib = self.model.find_rib(self.id, e.etype)
+            rib = self.model.find_rib(self.id, e.etype, e.dest)
             if rib is None:
                 self.model.sink(e.etype).put(self.env.now, e)   # выход системы / брак
             else:
@@ -372,6 +378,8 @@ class SortingCenterModel:
             top_share=dcfg.get("top_share", 0.2),
             volume_share=dcfg.get("volume_share", 0.8),
             profile=dcfg.get("profile", "pareto"),
+            groups=dcfg.get("groups", 0),
+            grouping=dcfg.get("grouping", "balanced"),
         ) if dcfg else None
 
         self.nodes: dict[int, Node] = {
@@ -379,12 +387,29 @@ class SortingCenterModel:
         }
         self.ribs: list[Rib] = [Rib(self.env, c) for c in graph["ribs"]]
         self._rib_by_name = {r.name: r for r in self.ribs}
-        self._rib_index: dict[tuple[int, str], Rib] = {(r.src, r.etype): r for r in self.ribs}
 
-        # входные очереди узлов = буферы входящих рёбер
+        # Общий буфер на (узел-приёмник, тип сущности): у узла один вход на тип,
+        # но поставщиков может быть несколько (20 секций 2-й стадии -> одна упаковка).
+        # Ёмкость общего буфера = сумма ёмкостей входящих рёбер.
+        shared: dict[tuple[int, str], simpy.Store] = {}
+        caps: dict[tuple[int, str], int] = {}
         for r in self.ribs:
-            if r.dst in self.nodes:
-                self.nodes[r.dst].in_stores[r.etype] = r.store
+            caps[(r.dst, r.etype)] = caps.get((r.dst, r.etype), 0) + r.capacity
+        for key, cap in caps.items():
+            shared[key] = simpy.Store(self.env, capacity=cap)
+        for r in self.ribs:
+            r.store = shared[(r.dst, r.etype)]
+
+        # индекс маршрутизации: (узел-источник, тип) -> список рёбер (могут различаться
+        # группой направлений)
+        self._rib_index: dict[tuple[int, str], list[Rib]] = {}
+        for r in self.ribs:
+            self._rib_index.setdefault((r.src, r.etype), []).append(r)
+
+        # входные очереди узлов = общие буферы входящих рёбер
+        for (dst, etype), store in shared.items():
+            if dst in self.nodes:
+                self.nodes[dst].in_stores[etype] = store
         # входы без входящего ребра (стартовый узел, source) — синтетический буфер
         for n in self.nodes.values():
             for t in n.inputs:
@@ -401,8 +426,28 @@ class SortingCenterModel:
         self.generated = 0
         self.sim_time = 0.0
 
-    def find_rib(self, src_id: int, etype: str) -> Rib | None:
-        return self._rib_index.get((src_id, etype))
+    def find_rib(self, src_id: int, etype: str, dest: int | None = None) -> Rib | None:
+        """Ребро, по которому уходит сущность.
+
+        Если из узла выходит несколько рёбер одного типа (сортировщик 1-й стадии ->
+        20 секций 2-й стадии), выбирается то, чья группа совпадает с группой
+        направления товара. Ребро без группы — запасной путь.
+        """
+        cands = self._rib_index.get((src_id, etype))
+        if not cands:
+            return None
+        if len(cands) == 1:
+            return cands[0]
+        prof = self.directions
+        if dest is not None and prof is not None and prof.group_of:
+            g = prof.group_of[dest]
+            for r in cands:
+                if r.dest_group == g:
+                    return r
+        for r in cands:
+            if r.dest_group is None:
+                return r
+        return cands[0]
 
     def sink(self, etype: str) -> Sink:
         if etype not in self._sinks:
@@ -446,9 +491,13 @@ class SortingCenterModel:
 
     # ---- мониторы ----
     def _sampler(self):
+        # рёбра могут делить общий буфер — семплируем каждый буфер один раз
+        uniq = {}
+        for r in self.ribs:
+            uniq.setdefault(id(r.store), r)
         while True:
             yield self.env.timeout(self.sample_dt)
-            for r in self.ribs:
+            for r in uniq.values():
                 r.level_samples.append(len(r.store.items))
 
     def _minute_series(self):

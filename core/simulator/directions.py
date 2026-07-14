@@ -23,7 +23,8 @@ import random
 
 class DirectionProfile:
     def __init__(self, count: int = 400, top_share: float = 0.2,
-                 volume_share: float = 0.8, profile: str = "pareto"):
+                 volume_share: float = 0.8, profile: str = "pareto",
+                 groups: int = 0, grouping: str = "balanced"):
         self.count = int(count)
         self.profile = profile
         self.top_share = top_share
@@ -39,6 +40,45 @@ class DirectionProfile:
         total = sum(weights)
         self.probs = [w / total for w in weights]
         self._cum = list(itertools.accumulate(self.probs))
+
+        # --- разбиение на группы для двухстадийной сортировки (20 x 20 = 400) ---
+        self.groups = int(groups)
+        self.grouping = grouping
+        self.group_of: list[int] = []
+        if self.groups > 0:
+            self.group_of = self._assign_groups()
+
+    def _assign_groups(self) -> list[int]:
+        """Раскладывает направления по группам первой стадии.
+
+        sequential — подряд (0-19 в группу 0, 20-39 в группу 1 и т.д.). Наивно и
+        плохо: из-за Парето в группу 0 попадают самые жирные направления, и первая
+        секция второй стадии перегружена, а последняя простаивает.
+
+        balanced — «змейкой» по убыванию объёма: направления раскладываются по
+        группам так, чтобы суммарный объём групп был примерно равен. Так вторая
+        стадия загружена равномерно.
+        """
+        g = [0] * self.count
+        if self.grouping == "sequential":
+            size = self.count // self.groups
+            for d in range(self.count):
+                g[d] = min(d // size, self.groups - 1)
+            return g
+        # balanced: направления уже отсортированы по убыванию объёма (probs убывают)
+        order = sorted(range(self.count), key=lambda d: -self.probs[d])
+        for rank, d in enumerate(order):
+            cycle, pos = divmod(rank, self.groups)
+            # змейка: чётный проход слева направо, нечётный — справа налево
+            g[d] = pos if cycle % 2 == 0 else self.groups - 1 - pos
+        return g
+
+    def group_volume_shares(self) -> list[float]:
+        """Доля объёма, приходящаяся на каждую группу первой стадии."""
+        shares = [0.0] * self.groups
+        for d in range(self.count):
+            shares[self.group_of[d]] += self.probs[d]
+        return shares
 
     # --- подбор alpha под заданное соотношение 20/80 ---
     @staticmethod

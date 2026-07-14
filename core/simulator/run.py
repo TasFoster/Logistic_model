@@ -100,6 +100,27 @@ def main() -> None:
     for etype, s in sorted(model._sinks.items()):
         print(f"выход {etype:<12}: {s.count / sim_h:>10.0f} шт/ч")
 
+    # сводка по двухстадийной сортировке (если в графе есть группы направлений)
+    prof = model.directions
+    if prof is not None and prof.groups > 0:
+        sec_ids = {r.dst for r in model.ribs if r.dest_group is not None}
+        secs = [model.nodes[i] for i in sorted(sec_ids) if i in model.nodes]
+        if secs:
+            print("-" * 68)
+            print(f"ДВУХСТАДИЙНАЯ СОРТИРОВКА: {prof.groups} групп x "
+                  f"{prof.count // prof.groups} направлений = {prof.count}")
+            print(f"  группировка: {prof.grouping}")
+            loads = []
+            for n in secs:
+                cap = n.workers * model.sim_time
+                loads.append(100.0 * n.busy / cap if cap else 0.0)
+            print(f"  секций 2-й стадии  : {len(secs)}")
+            print(f"  загрузка секций    : от {min(loads):.1f}% до {max(loads):.1f}%")
+            print(f"  мощность секций    : от {min(3600/n.services[0] for n in secs):.0f} "
+                  f"до {max(3600/n.services[0] for n in secs):.0f} шт/ч")
+            hot = max(secs, key=lambda n: n.processed)
+            print(f"  самая нагруженная  : {hot.name} ({hot.processed / sim_h:.0f} шт/ч)")
+
     # сводка по направлениям и заполняемости КТЯ
     pack = next((n for n in model.nodes.values() if n.by_direction), None)
     if pack is not None and model.directions is not None:

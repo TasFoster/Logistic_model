@@ -126,6 +126,7 @@ def _ribs(raw: dict) -> list[dict]:
             "etype": r.get("type_el", ""),
             "capacity": r.get("storage", 100),
             "travel": _travel_time(raw, r, pos.get(src, {}), pos.get(dst, {})),
+            "dest_group": r.get("dest_group"),   # группа направлений (2-я стадия)
         })
     return out
 
