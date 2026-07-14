@@ -1,11 +1,25 @@
 {
+    "id": 1,
     "name":"name",
-    "count_input": 1 ,
-    "count_output": 1 ,
-    "func_transform": "",
     "type_node": "",
-    "count_active_el": 1,
-    "effecive_el": 100,
-    "type_input":"", 
-    "type_output":""
+    "input":{
+        "EntityTypeA": 1
+    },
+    "output":{
+        "EntityTypeB": 20,
+        "EntityTypeC": 1
+    },
+    "effecive_ellements": [
+        {"name":"name", "ef":100},
+        {"name":"name", "ef":100},
+        {"name":"name", "ef":100}
+    ],
+    "pos":{
+        "x":1,
+        "y":1
+    },
+    "scale":{
+        "width":100,
+        "height":100
+    }
 }
