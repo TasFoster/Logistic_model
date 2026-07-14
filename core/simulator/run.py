@@ -30,13 +30,16 @@ def main() -> None:
 
     ap = argparse.ArgumentParser(description="Имитационная модель сортировочного центра")
     ap.add_argument("--graph", default=default_graph, help="путь к файлу графа JSON")
+    ap.add_argument("--scenario", default=None,
+                    help="файл сценария: времена обработки и интенсивность входа "
+                         "(нужен для графов из config/, где времени нет)")
     ap.add_argument("--hours", type=float, default=1.0, help="горизонт симуляции, часов")
     ap.add_argument("--warmup", type=float, default=300.0, help="прогрев (отбрасывается), секунд")
     ap.add_argument("--seed", type=int, default=42, help="зерно ГПСЧ (воспроизводимость)")
     ap.add_argument("--out", default="results", help="папка для CSV-результатов")
     args = ap.parse_args()
 
-    graph = load_graph(args.graph)
+    graph = load_graph(args.graph, args.scenario)
     model = SortingCenterModel(graph, seed=args.seed, warmup_s=args.warmup)
     model.run(hours=args.hours)
 
@@ -52,20 +55,21 @@ def main() -> None:
           f"(~{model.input_stream} товаров/ч), подано палет: {model.generated}")
     print(f"Узкое место: {metrics.find_bottleneck(model)}")
     print("-" * 68)
-    print(f"{'узел':<18}{'throughput':>14}{'загрузка':>12}{'блокир.':>12}")
+    # загрузка/блокировка/голодание считаются от полного времени прогона и в сумме = 100%
+    print(f"{'узел':<18}{'throughput':>13}{'работа':>10}{'блокир.':>10}{'голод':>10}")
     win_h = max((model.sim_time - model.warmup) / 3600.0, 1e-9)
     sim_h = model.sim_time / 3600.0
     for n in model.nodes.values():
-        busy = n.busy - n.busy_at_warmup
-        cap = n.workers * (model.sim_time - model.warmup)
-        u = 100.0 * busy / cap if cap > 0 else 0.0
-        b = 100.0 * n.blocked / cap if cap > 0 else 0.0
         if n.type == "source":
             # у source-узлов нет обработки — показываем выработку (produced)
-            print(f"{n.name:<18}{n.produced / sim_h:>12.0f} шт/ч{'—':>12}{'—':>12}")
-        else:
-            proc = n.processed - n.processed_at_warmup
-            print(f"{n.name:<18}{proc / win_h:>12.0f} шт/ч{u:>10.1f} %{b:>10.1f} %")
+            print(f"{n.name:<18}{n.produced / sim_h:>11.0f} шт/ч{'—':>10}{'—':>10}{'—':>10}")
+            continue
+        cap = n.workers * model.sim_time
+        u = 100.0 * n.busy / cap if cap > 0 else 0.0
+        b = 100.0 * n.blocked / cap if cap > 0 else 0.0
+        s = 100.0 * n.starved / cap if cap > 0 else 0.0
+        proc = n.processed - n.processed_at_warmup
+        print(f"{n.name:<18}{proc / win_h:>11.0f} шт/ч{u:>9.1f}%{b:>9.1f}%{s:>9.1f}%")
     print("-" * 68)
     for etype, s in sorted(model._sinks.items()):
         print(f"выход {etype:<12}: {s.count / sim_h:>10.0f} шт/ч")

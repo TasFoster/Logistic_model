@@ -6,35 +6,31 @@
       ребра И ЕСТЬ входная очередь узла-приёмника. Если буфер полон, put()
       приостанавливает воркера-источника -> так возникает БЛОКИРОВКА и каскадная
       деградация, которые требует показать задача.
-    - Узел  = набор параллельных воркеров (процессов SimPy). Каждый воркер собирает
-      входные сущности (одну или несколько — сборка/assembly), держит их
-      service_time_s секунд (обработка), затем порождает выходные сущности по
-      правилам узла и раскладывает их по исходящим рёбрам.
-    - Источник входного потока — внешний генератор палет с интенсивностью,
-      пересчитанной из input_stream (товаров/ч).
+    - Узел  = набор параллельных воркеров (процессов SimPy). Воркер собирает входные
+      сущности по inputs {тип: количество} (сборка/assembly), держит их service секунд,
+      затем порождает выходные сущности по outputs и раскладывает их по рёбрам.
+    - Источник входного потока — внешний генератор палет.
 
-Типы узлов (type_node):
-    Input      — точка приёмки: внешний генератор кладёт сюда входную сущность.
-    transform  — 1 вход -> выходы по (type_output[i], transform_kof[i]).
-    sort       — сортировка: 1 товар -> товар, доля nonsort уходит в отбраковку.
-    split      — развилка по долям (params.routes): напр. тара 80% реюз / 20% брак.
-    pack       — упаковка со сборкой (assembly): N товаров + 1 КТЯ -> 1 полный КТЯ.
-    source     — генератор тары (машина новых КТЯ), восполняет буфер по низкому уровню.
+Правила выходов (outputs {тип: значение}):
+    значение >= 1  — детерминированное размножение (вскрытие: 27 Product + 1 Box);
+    значение < 1   — доля вероятностной развилки: узел порождает ОДНУ сущность,
+                     выбранную по долям (сортировка: 0.95 Product / 0.05 Nonsort;
+                     тара: 0.8 реюз / 0.2 брак).
+    пустой outputs — узел-сток (Storage): потребляет и ничего не порождает.
 
-Модель читает тот же файл графа, что и аналитическая модель (общий контракт).
-Расширения схемы относительно config/example_graph.json (см. README, 'Пробелы схемы'):
-    service_time_s  — время обработки одной сущности одним воркером, секунд;
-    params          — параметры узла (nonsort_share, routes, source и т.д.);
-    assembly        — {тип_входа: количество} для узлов сборки.
+Модель работает на КАНОНИЧЕСКОМ графе (см. graph_loader.normalize), поэтому
+одинаково понимает схему контракта (config/example_graph.json) и раннюю схему
+прототипа (graph_mini/graph_tare).
 """
 
 from __future__ import annotations
 
-import json
 import random
 from dataclasses import dataclass
 
 import simpy
+
+from .graph_loader import load_json, normalize
 
 
 # ---------------------------------------------------------------------------
@@ -48,13 +44,13 @@ class Entity:
 
 
 class Sink:
-    """Сток: сущности, для которых нет исходящего ребра (выход системы,
-    поток брака/nonsort, поток пустой тары). put() никогда не блокирует."""
+    """Сток: сущности, для которых нет исходящего ребра (выход системы, брак,
+    nonsort). put() никогда не блокирует."""
 
     def __init__(self, etype: str):
         self.etype = etype
         self.count = 0
-        self.residence: list[float] = []  # время пребывания в центре
+        self.residence: list[float] = []
 
     def put(self, now: float, e: Entity) -> None:
         self.count += 1
@@ -65,14 +61,14 @@ class Rib:
     """Ребро = ограниченный буфер между двумя узлами.
     Его store одновременно служит входной очередью узла-приёмника."""
 
-    def __init__(self, env: simpy.Environment, name: str, cfg: dict):
-        self.name = name
-        self.src = cfg["node_in"]      # id узла-источника (поток входит в ребро)
-        self.dst = cfg["node_out"]     # id узла-приёмника (поток выходит из ребра)
-        self.etype = cfg.get("type_el", "")
-        self.capacity = cfg.get("storage", 100)
+    def __init__(self, env: simpy.Environment, cfg: dict):
+        self.name = cfg["name"]
+        self.src = cfg["src"]
+        self.dst = cfg["dst"]
+        self.etype = cfg["etype"]
+        self.capacity = cfg["capacity"]
         self.store = simpy.Store(env, capacity=self.capacity)
-        self.level_samples: list[int] = []  # заполненность буфера во времени
+        self.level_samples: list[int] = []
 
 
 # ---------------------------------------------------------------------------
@@ -84,122 +80,143 @@ class Node:
         self.model = model
         self.id = cfg["id"]
         self.name = cfg["name"]
-        self.type = cfg.get("type_node", "transform")
-        self.kof = cfg.get("transform_kof", [1])
-        self.out_types = cfg.get("type_output", [])
-        self.in_types = list(cfg.get("type_input", {}).values())
-        # ef трактуется как число параллельных воркеров (серверов) узла
-        elems = cfg.get("effecive_ellements", [{"ef": 1}])
-        self.workers = sum(int(e.get("ef", 1)) for e in elems) or 1
-        self.service = cfg.get("service_time_s", model.default_service)
+        self.type = cfg["type"]
+        self.inputs: dict[str, float] = cfg["inputs"]     # {тип: сколько нужно}
+        self.outputs: dict[str, float] = cfg["outputs"]   # {тип: кол-во или доля}
+        self.workers = cfg["workers"]
+        self.service = cfg["service"]
         self.params = cfg.get("params", {})
 
-        # сборка: сколько сущностей каждого типа нужно, чтобы узел сработал.
-        # По умолчанию — по 1 каждого входного типа (обычный узел).
-        self.assembly: dict[str, int] = cfg.get(
-            "assembly", {t: 1 for t in self.in_types}
-        )
-        self._needs_lock = any(int(q) > 1 for q in self.assembly.values())
+        # разделяем выходы на детерминированные (>=1) и вероятностные доли (<1)
+        self.det_out = {t: int(q) for t, q in self.outputs.items() if q >= 1}
+        self.prob_out = {t: float(q) for t, q in self.outputs.items() if 0 < q < 1}
 
-        # Входные очереди узла по типу сущности (задаются моделью после рёбер):
-        #   - обычный вход это буфер входящего ребра (ограниченный);
-        #   - для Input/source-типов — синтетический буфер под генератор.
-        self.in_stores: dict[str, simpy.Store] = {}
-        # Замок сборки: гарантирует, что партию собирает один воркер за раз
-        # (иначе воркеры разбирают буфер по частям и застревают на неполных партиях).
+        # сборка: если хотя бы одного типа нужно больше одной штуки, партию собирает
+        # один воркер за раз (иначе воркеры разберут буфер и застрянут на неполных партиях)
+        self._needs_lock = any(int(q) > 1 for q in self.inputs.values())
         self._gather_lock = simpy.Resource(env, capacity=1)
 
+        self.in_stores: dict[str, simpy.Store] = {}
+        self._wstate: dict[int, tuple[str, float]] = {}   # состояние каждого воркера
+
         # --- статистика ---
-        self.processed = 0            # сколько раз узел сработал (всего)
-        self.produced = 0             # для source-узлов: сколько сущностей порождено
-        self.busy = 0.0               # суммарное время обработки всеми воркерами
-        self.blocked = 0.0            # суммарное время ожидания на полном буфере
+        self.processed = 0
+        self.produced = 0             # для source-узлов
+        self.busy = 0.0               # время обработки
+        self.blocked = 0.0            # ожидание на полном выходном буфере
+        self.starved = 0.0            # ожидание входных сущностей (нехватка входа)
         self.processed_at_warmup = 0
         self.busy_at_warmup = 0.0
-        self.proc_series: list[int] = []  # снимки processed каждую модельную минуту
+        self.proc_series: list[int] = []
 
-    # ---- порождение воркеров ----
     def start(self) -> None:
         if self.type == "source":
-            return  # у source-узлов отдельный генератор (см. модель)
-        for _ in range(self.workers):
-            self.env.process(self._worker())
+            return                    # у source-узлов отдельный генератор
+        for wid in range(self.workers):
+            self.env.process(self._worker(wid))
 
-    def _worker(self):
+    def _worker(self, wid: int):
         env = self.env
         while True:
+            # 1) ждём входные сущности (голодание)
+            t = env.now
+            self._wstate[wid] = ("starved", t)
             if self._needs_lock:
                 with self._gather_lock.request() as req:
                     yield req
                     inputs = yield from self._gather()
             else:
                 inputs = yield from self._gather()
-            t0 = env.now
-            yield env.timeout(self.service)          # обработка
-            self.busy += env.now - t0
-            for out_e in self._transform(inputs):
-                yield from self._route(out_e)
+            self.starved += env.now - t
+
+            # 2) обработка
+            t = env.now
+            self._wstate[wid] = ("busy", t)
+            yield env.timeout(self.service)
+            self.busy += env.now - t
+
+            # 3) выдача выходов (блокировка, если буфер полон)
+            outs = list(self._transform(inputs))
+            t = env.now
+            self._wstate[wid] = ("blocked", t)
+            yield from self._emit(outs)
+            self.blocked += env.now - t
+
             self.processed += 1
 
+    def settle(self, now: float) -> None:
+        """Досчитывает незавершённое время воркеров на момент конца прогона.
+
+        Без этого время воркера, застрявшего в блокировке на полном буфере в момент
+        остановки симуляции, не попадало бы в статистику вообще — и заторможенная
+        система выглядела бы «незагруженной».
+        """
+        for state, t in self._wstate.values():
+            dt = now - t
+            if dt <= 0:
+                continue
+            if state == "starved":
+                self.starved += dt
+            elif state == "busy":
+                self.busy += dt
+            elif state == "blocked":
+                self.blocked += dt
+
     def _gather(self):
-        """Собирает нужное число входных сущностей каждого типа (assembly)."""
-        inputs: dict[str, list[Entity]] = {}
-        for etype, qty in self.assembly.items():
+        """Собирает нужное число входных сущностей каждого типа."""
+        gathered: dict[str, list[Entity]] = {}
+        for etype, qty in self.inputs.items():
             got: list[Entity] = []
             store = self.in_stores[etype]
             for _ in range(int(qty)):
                 got.append((yield store.get()))
-            inputs[etype] = got
-        return inputs
+            gathered[etype] = got
+        return gathered
 
-    # ---- функция преобразования узла ----
-    def _transform(self, inputs: dict[str, list[Entity]]):
-        """Порождает выходные сущности из набора входных по правилам узла."""
-        all_ents = [e for lst in inputs.values() for e in lst]
+    def _transform(self, gathered: dict[str, list[Entity]]):
+        """Порождает выходные сущности по правилам outputs."""
+        all_ents = [e for lst in gathered.values() for e in lst]
         t_rep = min((e.t_created for e in all_ents), default=self.env.now)
 
-        if self.type == "sort":
-            # Сортировка: 1 товар -> 1 товар, но доля nonsort уходит в отбраковку
-            share = self.params.get("nonsort_share", 0.0)
-            if self.model.rng.random() < share:
-                yield Entity("Nonsort", t_rep)
-            else:
-                yield Entity(self.out_types[0] if self.out_types else all_ents[0].etype, t_rep)
-            return
+        # детерминированные выходы: размножение по количеству
+        for etype, qty in self.det_out.items():
+            for _ in range(qty):
+                yield Entity(etype, t_rep)
 
-        if self.type == "split":
-            # Развилка по долям: напр. тара 80% EmptyKTY (реюз) / 20% Brak (брак)
-            routes = self.params.get("routes", [])
+        # вероятностная развилка: ровно одна сущность по долям
+        if self.prob_out:
             r = self.model.rng.random()
             cum = 0.0
-            chosen = routes[-1]["type"] if routes else (
-                self.out_types[0] if self.out_types else all_ents[0].etype)
-            for route in routes:
-                cum += route["share"]
+            chosen = list(self.prob_out)[-1]
+            for etype, share in self.prob_out.items():
+                cum += share
                 if r <= cum:
-                    chosen = route["type"]
+                    chosen = etype
                     break
             yield Entity(chosen, t_rep)
-            return
 
-        # transform / Input / pack: выходы по (type_output[i], transform_kof[i])
-        for i, out_type in enumerate(self.out_types):
-            k = int(self.kof[i]) if i < len(self.kof) else 1
-            for _ in range(k):
-                yield Entity(out_type, t_rep)
+    def _emit(self, entities: list[Entity]):
+        """Выдаёт ВСЕ выходы узла ПАРАЛЛЕЛЬНО.
 
-    # ---- маршрутизация выхода по рёбрам ----
-    def _route(self, e: Entity):
-        rib = self.model.find_rib(self.id, e.etype)
-        if rib is None:
-            # нет исходящего ребра для этого типа -> сток (выход системы / брак / nonsort)
-            self.model.sink(e.etype).put(self.env.now, e)
+        Важно: выходы разных типов уходят на разные ленты одновременно. Если бы узел
+        выкладывал их по очереди, затор на одной ленте не давал бы отдать выход на
+        другую — и возникал бы круговой клинч (вскрытие держит короб, пока забита
+        лента товаров; упаковка ждёт короб и не разбирает товары). Физически вскрытие
+        КТЯ отдаёт товары и пустой короб одновременно.
+
+        Узел всё равно остаётся занятым, пока ВСЕ выходы не приняты, — поэтому
+        блокировка при переполнении буфера сохраняется.
+        """
+        events = []
+        for e in entities:
+            rib = self.model.find_rib(self.id, e.etype)
+            if rib is None:
+                self.model.sink(e.etype).put(self.env.now, e)   # выход системы / брак
+            else:
+                events.append(rib.store.put(e))   # ставим put в очередь, не ждём здесь
+        if not events:
             return
-        t0 = self.env.now
-        yield rib.store.put(e)             # БЛОКИРУЕТСЯ, если буфер полон
-        dt = self.env.now - t0
-        if dt > 0:
-            self.blocked += dt
+        yield self.env.all_of(events)             # ждём, пока все выходы примут
 
 
 # ---------------------------------------------------------------------------
@@ -207,49 +224,40 @@ class Node:
 # ---------------------------------------------------------------------------
 class SortingCenterModel:
     def __init__(self, graph: dict, seed: int = 42, warmup_s: float = 300.0,
-                 default_service: float = 30.0, sample_dt: float = 5.0):
+                 sample_dt: float = 5.0):
+        """graph — КАНОНИЧЕСКИЙ граф (см. graph_loader.normalize)."""
         self.env = simpy.Environment()
         self.rng = random.Random(seed)
         self.warmup = warmup_s
-        self.default_service = default_service
         self.sample_dt = sample_dt
         self.graph = graph
 
-        # узлы
-        self.nodes: dict[int, Node] = {}
-        for cfg in graph["nodes"].values():
-            n = Node(self.env, cfg, self)
-            self.nodes[n.id] = n
-
-        # рёбра
-        self.ribs: list[Rib] = [Rib(self.env, name, c) for name, c in graph["ribs"].items()]
-        self._rib_by_name: dict[str, Rib] = {r.name: r for r in self.ribs}
-        # индекс: (id_источника, тип_сущности) -> ребро
-        self._rib_index: dict[tuple[int, str], Rib] = {
-            (r.src, r.etype): r for r in self.ribs
+        self.nodes: dict[int, Node] = {
+            nid: Node(self.env, cfg, self) for nid, cfg in graph["nodes"].items()
         }
+        self.ribs: list[Rib] = [Rib(self.env, c) for c in graph["ribs"]]
+        self._rib_by_name = {r.name: r for r in self.ribs}
+        self._rib_index: dict[tuple[int, str], Rib] = {(r.src, r.etype): r for r in self.ribs}
 
-        # входные очереди узлов: буфер входящего ребра по типу сущности
+        # входные очереди узлов = буферы входящих рёбер
         for r in self.ribs:
-            self.nodes[r.dst].in_stores[r.etype] = r.store
-        # недостающие входы (у Input/source нет входящего ребра) — синтетический буфер
+            if r.dst in self.nodes:
+                self.nodes[r.dst].in_stores[r.etype] = r.store
+        # входы без входящего ребра (стартовый узел, source) — синтетический буфер
         for n in self.nodes.values():
-            for t in n.in_types:
+            for t in n.inputs:
                 if t not in n.in_stores:
                     n.in_stores[t] = simpy.Store(self.env)
 
-        # стоки (создаются лениво по типу сущности)
         self._sinks: dict[str, Sink] = {}
 
-        # интенсивность входа: input_stream товаров/ч -> палет/ч
-        # 1 палета -> 20 КТЯ -> 27 товаров: товаров = палет * 20 * 27
+        self.arrival_rate_h = graph["arrival_rate_h"]
+        self.start_node_id = graph.get("start_node_id")
+        self.input_type = graph.get("input_type")
         self.input_stream = graph.get("input_stream", 100000)
-        self.arrival_rate_h = self.input_stream / (20 * 27)  # палет/ч
-        self.generated = 0  # сколько палет подано генератором
-
+        self.generated = 0
         self.sim_time = 0.0
 
-    # ---- вспомогательное ----
     def find_rib(self, src_id: int, etype: str) -> Rib | None:
         return self._rib_index.get((src_id, etype))
 
@@ -258,24 +266,24 @@ class SortingCenterModel:
             self._sinks[etype] = Sink(etype)
         return self._sinks[etype]
 
-    # ---- источник входного потока (приёмка палет) ----
+    # ---- генератор входного потока (палеты в приёмку) ----
     def _palet_source(self):
         env = self.env
-        sources = [n for n in self.nodes.values() if n.type == "Input"]
+        # стартовый узел: из графа, иначе — узел типа Input
+        start = self.nodes.get(self.start_node_id)
+        if start is None:
+            start = next((n for n in self.nodes.values() if n.type == "Input"), None)
+        if start is None:
+            return
+        in_type = self.input_type or (next(iter(start.inputs), "Palet"))
         interval = 3600.0 / self.arrival_rate_h
         while True:
             yield env.timeout(interval)
-            for n in sources:
-                in_type = n.in_types[0] if n.in_types else "Palet"
-                # источник не ограничен: если приёмка не успевает, палеты копятся
-                # во входном буфере узла-источника (представляет очередь машин/двор)
-                yield n.in_stores[in_type].put(Entity(in_type, env.now))
-                self.generated += 1
+            yield start.in_stores[in_type].put(Entity(in_type, env.now))
+            self.generated += 1
 
-    # ---- генератор тары (машина новых КТЯ): восполняет буфер по низкому уровню ----
+    # ---- генератор тары (машина новых КТЯ) ----
     def _tare_source(self, node: Node):
-        """params: {emit_type, target_rib, low, poll}. Кладёт новую тару в целевой
-        буфер, пока его уровень ниже low. Производительность эмерджентна = дефициту."""
         env = self.env
         emit = node.params.get("emit_type", "EmptyKTY")
         target = self._rib_by_name.get(node.params.get("target_rib", ""))
@@ -293,16 +301,14 @@ class SortingCenterModel:
 
     # ---- мониторы ----
     def _sampler(self):
-        env = self.env
         while True:
-            yield env.timeout(self.sample_dt)
+            yield self.env.timeout(self.sample_dt)
             for r in self.ribs:
                 r.level_samples.append(len(r.store.items))
 
     def _minute_series(self):
-        env = self.env
         while True:
-            yield env.timeout(60.0)
+            yield self.env.timeout(60.0)
             for n in self.nodes.values():
                 n.proc_series.append(n.processed)
 
@@ -312,11 +318,9 @@ class SortingCenterModel:
             n.processed_at_warmup = n.processed
             n.busy_at_warmup = n.busy
 
-    # ---- запуск ----
     def run(self, hours: float = 1.0):
         for n in self.nodes.values():
             n.start()
-        # генераторы: приёмка палет + машины новых КТЯ (source-узлы)
         self.env.process(self._palet_source())
         for n in self.nodes.values():
             if n.type == "source":
@@ -326,9 +330,14 @@ class SortingCenterModel:
         self.env.process(self._warmup_snapshot())
         self.sim_time = hours * 3600.0
         self.env.run(until=self.sim_time)
+        for n in self.nodes.values():
+            n.settle(self.env.now)     # досчитать незавершённое время воркеров
         return self
 
 
-def load_graph(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+def load_graph(path: str, scenario_path: str | None = None) -> dict:
+    """Читает файл графа (любая из схем) и приводит к каноническому виду.
+    scenario_path — файл со временами обработки и интенсивностью входа."""
+    raw = load_json(path)
+    scenario = load_json(scenario_path) if scenario_path else None
+    return normalize(raw, scenario)

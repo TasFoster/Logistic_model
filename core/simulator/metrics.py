@@ -40,15 +40,17 @@ def collect_rows(m: SortingCenterModel) -> list[dict]:
             add(n.name, "workers", n.workers, "шт")
             continue
         proc = n.processed - n.processed_at_warmup          # обработано за окно
-        busy = n.busy - n.busy_at_warmup                    # занятость за окно
         throughput = proc / win_h                           # шт/ч
-        capacity_time = n.workers * (m.sim_time - m.warmup)  # доступное время всех воркеров
-        utilization = 100.0 * busy / capacity_time if capacity_time > 0 else 0.0
+        # доля работы/блокировки/голодания — от полного времени всех воркеров (в сумме 100%)
+        capacity_time = n.workers * m.sim_time
+        utilization = 100.0 * n.busy / capacity_time if capacity_time > 0 else 0.0
         blocked = 100.0 * n.blocked / capacity_time if capacity_time > 0 else 0.0
+        starved = 100.0 * n.starved / capacity_time if capacity_time > 0 else 0.0
 
         add(n.name, "throughput", throughput, "шт/ч")
         add(n.name, "utilization", utilization, "%")
         add(n.name, "blocked", blocked, "%")
+        add(n.name, "starved", starved, "%")
         add(n.name, "workers", n.workers, "шт")
 
     # ---- по рёбрам (буферам) ----
@@ -101,13 +103,22 @@ def write_minute_series(m: SortingCenterModel, path: str) -> None:
 
 
 def find_bottleneck(m: SortingCenterModel) -> str:
-    """Узел с максимальной загрузкой — узкое место системы."""
-    win = m.sim_time - m.warmup
-    best, best_u = None, -1.0
+    """Узкое место — узел, который меньше всех простаивает без дела.
+
+    Критерий: максимальная (работа + блокировка), т.е. минимальное голодание.
+    Такой узел либо занят на пределе, либо заперт полным буфером — в обоих случаях
+    именно он ограничивает систему, а не ждёт входа от других.
+    """
+    best, best_load = None, -1.0
     for n in m.nodes.values():
-        busy = n.busy - n.busy_at_warmup
-        cap = n.workers * win
-        u = busy / cap if cap > 0 else 0.0
-        if u > best_u:
-            best, best_u = n, u
-    return f"{best.name} (загрузка {100 * best_u:.1f}%)" if best else "—"
+        if n.type == "source":
+            continue
+        cap = n.workers * m.sim_time
+        load = (n.busy + n.blocked) / cap if cap > 0 else 0.0
+        if load > best_load:
+            best, best_load = n, load
+    if not best:
+        return "—"
+    cap = best.workers * m.sim_time
+    return (f"{best.name} (работа {100*best.busy/cap:.1f}% + "
+            f"блокировка {100*best.blocked/cap:.1f}%)")

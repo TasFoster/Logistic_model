@@ -106,6 +106,50 @@ def test_pack_assembly_ratio():
     assert abs(pack.processed - kty_out.count) / max(pack.processed, 1) < 0.05
 
 
+def run_contract(hours: float = 1.0) -> SortingCenterModel:
+    """Граф из общего контракта (config/example_graph.json) + слой времён."""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    graph = load_graph(os.path.join(root, "config", "example_graph.json"),
+                       os.path.join(os.path.dirname(__file__), "scenario_example.json"))
+    return SortingCenterModel(graph, seed=42, warmup_s=300.0).run(hours=hours)
+
+
+def test_contract_graph_runs():
+    """Модель читает граф общего контракта и прогоняет его."""
+    m = run_contract()
+    assert len(m.nodes) == 5, "не все узлы контрактного графа загружены"
+    assert m.generated > 0, "входной поток не подан"
+    assert any(n.processed > 0 for n in m.nodes.values()), "ни один узел не сработал"
+
+
+def test_time_accounting_sums_to_100():
+    """Работа + блокировка + голодание = 100% времени воркеров.
+
+    Защита от ошибки, при которой время воркера, застрявшего в блокировке на момент
+    конца прогона, не попадало в статистику и система выглядела незагруженной.
+    """
+    m = run_contract()
+    for n in m.nodes.values():
+        if n.type == "source":
+            continue
+        cap = n.workers * m.sim_time
+        total = n.busy + n.blocked + n.starved
+        assert abs(total - cap) / cap < 0.01, \
+            f"{n.name}: учтено {total:.0f} с из {cap:.0f} с — время теряется"
+
+
+def test_no_deadlock_on_contract_graph():
+    """Система не встаёт колом: узел вскрытия реально обрабатывает КТЯ.
+
+    Ловит регресс к последовательной выдаче выходов, при которой затор на ленте
+    товаров не давал отдать пустой короб, а упаковка без короба не разбирала товары.
+    """
+    m = run_contract()
+    unpack = next(n for n in m.nodes.values() if n.name == "unKTU")
+    assert unpack.processed > 500, \
+        f"вскрытие обработало всего {unpack.processed} КТЯ за час — похоже на взаимоблокировку"
+
+
 def _main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
