@@ -32,7 +32,13 @@ def collect_rows(m: SortingCenterModel) -> list[dict]:
                      "unit": unit})
 
     # ---- по узлам ----
+    sim_h = m.sim_time / 3600.0
     for n in m.nodes.values():
+        if n.type == "source":
+            # source-узел (машина новых КТЯ): нет обработки, есть выработка
+            add(n.name, "produced", n.produced / sim_h, "шт/ч")
+            add(n.name, "workers", n.workers, "шт")
+            continue
         proc = n.processed - n.processed_at_warmup          # обработано за окно
         busy = n.busy - n.busy_at_warmup                    # занятость за окно
         throughput = proc / win_h                           # шт/ч

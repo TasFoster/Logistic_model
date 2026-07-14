@@ -26,6 +26,12 @@ def run_model(hours: float = 0.5) -> SortingCenterModel:
     return m.run(hours=hours)
 
 
+def run_tare(hours: float = 3.0) -> SortingCenterModel:
+    graph = load_graph(os.path.join(os.path.dirname(__file__), "graph_tare.json"))
+    m = SortingCenterModel(graph, seed=42, warmup_s=300.0)
+    return m.run(hours=hours)
+
+
 def test_runs_and_produces_output():
     m = run_model()
     assert m.generated > 0, "генератор не подал ни одной палеты"
@@ -62,6 +68,42 @@ def test_buffer_before_bottleneck_fills():
     rib2 = next(r for r in m.ribs if r.dst == 3)  # ребро в сортировку
     assert max(rib2.level_samples) >= rib2.capacity * 0.9, \
         "буфер перед узким местом не переполняется — блокировка не воспроизводится"
+
+
+def test_tare_split_80_20():
+    """Развилка тары даёт ~80% реюза и ~20% брака от вскрытых пустых КТЯ."""
+    m = run_tare()
+    split = next(n for n in m.nodes.values() if n.type == "split")
+    brak = m._sinks.get("Brak")
+    assert brak is not None and split.processed > 0, "нет потока брака тары"
+    scrap_share = brak.count / split.processed
+    assert 0.17 < scrap_share < 0.23, f"доля брака {scrap_share:.3f} вне ~0.20"
+
+
+def test_tare_new_kty_covers_deficit():
+    """Машина новых КТЯ включается, и баланс тары сходится:
+    реюз + новые КТЯ ≈ потреблению упаковки (в пределах 3%)."""
+    m = run_tare()
+    src = next(n for n in m.nodes.values() if n.type == "source")
+    pack = next(n for n in m.nodes.values() if n.type == "pack")
+    split = next(n for n in m.nodes.values() if n.type == "split")
+    brak = m._sinks.get("Brak")
+    assert src.produced > 0, "машина новых КТЯ не произвела ни одной тары"
+    reused = split.processed - brak.count
+    supply = reused + src.produced
+    demand = pack.processed  # 1 пустой КТЯ на 1 полный КТЯ
+    assert abs(supply - demand) / max(demand, 1) < 0.03, \
+        f"баланс тары не сходится: спрос {demand}, поставка {supply}"
+
+
+def test_pack_assembly_ratio():
+    """Упаковка собирает 27 товаров в 1 КТЯ: выход КТЯ ≈ вход товаров / 27."""
+    m = run_tare()
+    pack = next(n for n in m.nodes.values() if n.type == "pack")
+    kty_out = m._sinks.get("KTY_out")
+    assert kty_out is not None and kty_out.count > 0
+    # каждое срабатывание упаковки -> 1 полный КТЯ из 27 товаров
+    assert abs(pack.processed - kty_out.count) / max(pack.processed, 1) < 0.05
 
 
 def _main():
