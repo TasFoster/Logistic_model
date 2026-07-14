@@ -330,6 +330,74 @@ def test_nonsort_growth_cuts_output():
         "рост nonsort не снизил выход КТЯ"
 
 
+# ---------------------------------------------------------------------------
+# Возвратный поток nonsort и мобильные ресурсы (погрузчики)
+# ---------------------------------------------------------------------------
+def test_nonsort_returns_to_outgoing_flow():
+    """Отбраковка не пропадает: её разбирают вручную и возвращают в исходящий поток.
+
+    По постановке nonsort-товары «возвращаются в общий исходящий поток». Раньше они
+    уходили в сток и терялись — теперь часть возвращается на упаковку, часть уезжает
+    в роллкейджах.
+    """
+    m = run_2stage()
+    manual = next(n for n in m.nodes.values() if n.name == "RuchnayaSort")
+    assert manual.processed > 0, "ручная сортировка не работает"
+
+    # выход упаковки с возвратом должен быть ВЫШЕ, чем без него
+    rc = next(n for n in m.nodes.values() if n.name == "OtgruzkaRollCage")
+    back = manual.processed - rc.processed
+    assert back > 0, "ничего не вернулось в исходящий поток"
+    # примерно поровну: половина в поток, половина в роллкейджи
+    share = back / manual.processed
+    assert 0.4 < share < 0.6, f"доля возврата {share:.2f} вне ожидаемого ~0.5"
+
+
+def test_manual_sort_rate_from_task():
+    """Производительность ручной сортировки — 250 товаров/ч на человека (из постановки)."""
+    from .graph_loader import load_json, normalize
+    g = normalize(load_json(os.path.join(os.path.dirname(__file__), "graph_2stage.json")))
+    manual = next(c for c in g["nodes"].values() if c["name"] == "RuchnayaSort")
+    per_person = 3600.0 / manual["services"][0]
+    assert abs(per_person - 250.0) < 1.0, \
+        f"на человека {per_person:.0f} тов/ч, в постановке 250"
+
+
+def test_forklifts_serve_ribs():
+    """Погрузчики — не узлы графа, а пул, обслуживающий транспортные рёбра."""
+    m = run_2stage()
+    assert "forklift" in m.pools, "пул погрузчиков не создан"
+    assert m.pool_trips["forklift"] > 0, "погрузчики не сделали ни одного рейса"
+    assert m.pool_carried["forklift"] > 0, "погрузчики ничего не перевезли"
+    # погрузчик — не узел графа
+    assert not any(n.name == "forklift" for n in m.nodes.values()), \
+        "погрузчик не должен быть узлом графа"
+    util = 100.0 * m.pool_busy["forklift"] / (m.pools["forklift"].capacity * m.sim_time)
+    assert 0 < util < 100, f"загрузка парка {util:.1f}% вне разумного диапазона"
+
+
+def test_forklift_shortage_chokes_line():
+    """Нехватка погрузчиков душит линию через каскад — парк надо размерять.
+
+    Ловит реальную ошибку: если рейс везёт слишком мало (партия 8 вместо 100),
+    погрузчики становятся узким местом и обрушивают весь поток.
+    """
+    import copy
+    from .graph_loader import load_json, normalize
+    from .model import SortingCenterModel
+    raw = load_json(os.path.join(os.path.dirname(__file__), "graph_2stage.json"))
+
+    def out(mult_batch):
+        r = copy.deepcopy(raw)
+        r["ribs"]["rib_rollcage"]["batch"] = mult_batch
+        m = SortingCenterModel(normalize(r), seed=42, warmup_s=600.0).run(hours=2.0)
+        return next(n for n in m.nodes.values() if n.by_direction).filled
+
+    normal, starved = out(100), out(8)
+    assert starved < normal * 0.5, \
+        f"нехватка погрузчиков не сказалась на выходе: {starved} против {normal}"
+
+
 def _main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

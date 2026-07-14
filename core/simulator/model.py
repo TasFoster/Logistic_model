@@ -76,6 +76,10 @@ class Rib:
         # группа направлений, которую несёт это ребро (двухстадийная сортировка):
         # ребро от сортировщика 1-й стадии к своей секции 2-й стадии
         self.dest_group = cfg.get("dest_group")
+        self.dist_m = float(cfg.get("dist_m", 0.0))
+        self.pool = cfg.get("pool")            # имя пула мобильных ресурсов
+        self.batch = int(cfg.get("batch", 1))  # сколько единиц везёт один рейс
+        self.dest_store: simpy.Store | None = None  # буфер узла-приёмника
         # store назначается моделью: рёбра, ведущие в ОДИН узел с ОДНИМ типом
         # сущности, делят общий буфер (у узла один вход на тип, но поставщиков
         # может быть много — 20 секций 2-й стадии кормят одну упаковку)
@@ -412,6 +416,17 @@ class SortingCenterModel:
         self.nodes: dict[int, Node] = {
             nid: Node(self.env, cfg, self) for nid, cfg in graph["nodes"].items()
         }
+        # пулы мобильных ресурсов (погрузчики, роботы-перевозчики).
+        # По концепции они НЕ узлы графа, а ресурс, обслуживающий транспортные рёбра.
+        pcfg = graph.get("resource_pools") or {}
+        self.pool_cfg = pcfg
+        self.pools = {name: simpy.Resource(self.env, capacity=int(c.get("count", 1)))
+                      for name, c in pcfg.items()}
+        self.pool_busy = {name: 0.0 for name in self.pools}   # время в рейсах
+        self.pool_trips = {name: 0 for name in self.pools}    # число рейсов
+        self.pool_carried = {name: 0 for name in self.pools}  # перевезено единиц
+        self.pool_wait = {name: 0.0 for name in self.pools}   # ожидание свободной единицы
+
         self.ribs: list[Rib] = [Rib(self.env, c) for c in graph["ribs"]]
         self._rib_by_name = {r.name: r for r in self.ribs}
 
@@ -425,7 +440,17 @@ class SortingCenterModel:
         for key, cap in caps.items():
             shared[key] = simpy.Store(self.env, capacity=cap)
         for r in self.ribs:
-            r.store = shared[(r.dst, r.etype)]
+            r.dest_store = shared[(r.dst, r.etype)]
+            if r.pool:
+                # ребро обслуживает погрузчик: узел-источник кладёт в НАКОПИТЕЛЬ,
+                # а в буфер приёмника груз попадает только рейсом
+                r.store = simpy.Store(self.env, capacity=r.capacity)
+                # время рейса считаем по скорости погрузчика, а не конвейера
+                sp = float(self.pool_cfg.get(r.pool, {}).get("speed_mps", 0)) or 0.0
+                if sp > 0 and r.dist_m:
+                    r.travel = r.dist_m / sp
+            else:
+                r.store = r.dest_store
 
         # индекс маршрутизации: (узел-источник, тип) -> список рёбер (могут различаться
         # группой направлений)
@@ -517,6 +542,31 @@ class SortingCenterModel:
             else:
                 yield env.timeout(poll)
 
+    # ---- мобильные ресурсы (погрузчики) на рёбрах ----
+    def _hauler(self, rib: Rib):
+        """Рейс погрузчика: копит партию, берёт свободную единицу из пула,
+        едет туда-обратно и выгружает груз в буфер приёмника."""
+        env = self.env
+        pool = self.pools[rib.pool]
+        cfg = self.pool_cfg.get(rib.pool, {})
+        handling = float(cfg.get("handling_s", 30))     # погрузка + разгрузка
+        while True:
+            items = [(yield rib.store.get())]           # ждём первую единицу
+            while len(items) < rib.batch and rib.store.items:
+                items.append((yield rib.store.get()))   # добираем партию из накопителя
+            t0 = env.now
+            with pool.request() as req:
+                yield req                               # ждём свободный погрузчик
+                self.pool_wait[rib.pool] += env.now - t0
+                trip = 2.0 * rib.travel + handling      # туда, обратно, погрузка-выгрузка
+                yield env.timeout(trip)
+                self.pool_busy[rib.pool] += trip
+                self.pool_trips[rib.pool] += 1
+                self.pool_carried[rib.pool] += len(items)
+            for e in items:
+                e.ready_at = env.now                    # уже доставлено
+                yield rib.dest_store.put(e)
+
     # ---- отказ оборудования ----
     def _outage(self, node: "Node", start_s: float, duration_s: float):
         """Узел выходит из строя на интервале и потом возвращается в строй."""
@@ -562,6 +612,9 @@ class SortingCenterModel:
         for n in self.nodes.values():
             if n.type == "source":
                 self.env.process(self._tare_source(n))
+        for r in self.ribs:
+            if r.pool and r.pool in self.pools:
+                self.env.process(self._hauler(r))
         for o in self.outages:
             target = next((n for n in self.nodes.values() if n.name == o["node"]), None)
             if target is not None:

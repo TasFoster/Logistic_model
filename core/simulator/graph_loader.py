@@ -88,6 +88,17 @@ def _node_resources(n: dict) -> tuple[int, list[float]]:
     return len(rates), [3600.0 / r for r in rates]
 
 
+def _distance_m(raw: dict, src_pos: dict, dst_pos: dict) -> float:
+    """Расстояние между узлами в метрах по координатам плана."""
+    tr = raw.get("transport") or {}
+    unit_m = float(tr.get("unit_m", 0))
+    if not unit_m or not src_pos or not dst_pos:
+        return 0.0
+    dx = float(src_pos.get("x", 0)) - float(dst_pos.get("x", 0))
+    dy = float(src_pos.get("y", 0)) - float(dst_pos.get("y", 0))
+    return ((dx * dx + dy * dy) ** 0.5) * unit_m
+
+
 def _travel_time(raw: dict, rib: dict, src_pos: dict, dst_pos: dict) -> float:
     """Время перемещения по ребру, секунд.
 
@@ -126,7 +137,12 @@ def _ribs(raw: dict) -> list[dict]:
             "etype": r.get("type_el", ""),
             "capacity": r.get("storage", 100),
             "travel": _travel_time(raw, r, pos.get(src, {}), pos.get(dst, {})),
+            "dist_m": _distance_m(raw, pos.get(src, {}), pos.get(dst, {})),
             "dest_group": r.get("dest_group"),   # группа направлений (2-я стадия)
+            # мобильный ресурс, обслуживающий ребро (погрузчик/робот-перевозчик):
+            # ребро копит партию, берёт свободную единицу из пула, та едет туда-обратно
+            "pool": r.get("pool"),
+            "batch": int(r.get("batch", 1)),
         })
     return out
 
@@ -184,6 +200,7 @@ def normalize(raw: dict, scenario: dict | None = None) -> dict:
         "input_type": raw.get("type_input"),
         "input_stream": raw.get("input_stream", 100000),
         "directions": raw.get("directions"),
+        "resource_pools": raw.get("resource_pools") or {},
     }
 
 

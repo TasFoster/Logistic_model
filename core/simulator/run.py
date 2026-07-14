@@ -138,8 +138,14 @@ def main() -> None:
                   f"(закрыты по таймауту {pack.flush_timeout/60:.0f} мин)")
         print(f"  ячеек-накопителей   : {pack.max_open_bins:>8} (пик одновременно занятых)")
 
-    # сводка баланса оборота тары (если в графе есть цикл тары)
-    split = next((n for n in model.nodes.values() if n.type == "split"), None)
+    # сводка баланса оборота тары.
+    # Развилок в графе может быть несколько (ручная сортировка nonsort — тоже split),
+    # поэтому ищем именно ту, что снабжает упаковку ТАРОЙ (не товаром).
+    split = None
+    if pack is not None:
+        tare_types = {t for t in pack.inputs if t != model.goods_type}
+        split = next((n for n in model.nodes.values()
+                      if n.type == "split" and (set(n.outputs) & tare_types)), None)
     new_kty = sum(n.produced for n in model.nodes.values() if n.type == "source")
     if split is not None:
         scrapped_total = _scrapped_count(model, split)
@@ -156,6 +162,35 @@ def main() -> None:
             print(f"  в брак (вывоз)     : {scrapped:>8.0f} шт/ч  ({100*scrapped/empties:>4.1f}%)")
             print(f"  новых КТЯ (машина) : {new_rate:>8.0f} шт/ч")
             print(f"  баланс: реюз+новые = {supply:>6.0f} шт/ч (спрос упаковки)")
+    # сводка по мобильным ресурсам (погрузчики)
+    if model.pools:
+        print("-" * 68)
+        print("МОБИЛЬНЫЕ РЕСУРСЫ (обслуживают транспортные рёбра):")
+        for name, res in model.pools.items():
+            cnt = res.capacity
+            util = 100.0 * model.pool_busy[name] / (cnt * model.sim_time) if cnt else 0.0
+            trips = model.pool_trips[name]
+            carried = model.pool_carried[name]
+            wait = model.pool_wait[name] / max(trips, 1)
+            print(f"  {name}: {cnt} ед. | загрузка {util:.1f}% | "
+                  f"{trips / sim_h:.0f} рейсов/ч | перевезено {carried / sim_h:.0f} шт/ч")
+            print(f"  {'':<{len(name)}}  среднее ожидание свободной единицы: {wait:.1f} с")
+
+    # сводка по возвратному потоку nonsort
+    manual = next((n for n in model.nodes.values()
+                   if "Nonsort" in n.inputs and n.type == "split"), None)
+    if manual is not None:
+        rollcage = model._sinks.get("RollCage")
+        rc = rollcage.count if rollcage else next(
+            (n.processed for n in model.nodes.values() if "RollCage" in n.inputs), 0)
+        back = manual.processed - rc
+        print("-" * 68)
+        print("ВОЗВРАТНЫЙ ПОТОК NONSORT:")
+        print(f"  разобрано вручную  : {manual.processed / sim_h:>8.0f} шт/ч "
+              f"({manual.workers} чел.)")
+        print(f"  возврат в поток    : {back / sim_h:>8.0f} шт/ч (на упаковку, направление определено вручную)")
+        print(f"  в роллкейджи       : {rc / sim_h:>8.0f} шт/ч (крупногабарит, на отгрузку)")
+
     if written:
         print("-" * 68)
         labels = ", ".join(os.path.basename(p).replace("series_", "").replace(".csv", "")
