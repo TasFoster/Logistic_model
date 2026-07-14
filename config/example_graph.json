@@ -1,20 +1,17 @@
 {
     "nodes":{
-        "node1": { 
+        "node1": {
             "id": 1,
             "name":"Depaletizciya",
-            "type_node": "Input", 
-            "transform_kof":[
-                20
-            ],  
+            "type_node": "Input",
+            "input":{
+                "Palet": 1
+            },
+            "output":{
+                "KTY": 20
+            },
             "effecive_ellements": [
                 {"name":"people", "ef":8}
-            ],
-            "type_input":{
-                "type_input_1":"Palet"
-            }, 
-            "type_output":[
-                "KTY"
             ],
             "pos":{
                 "x":1,
@@ -28,20 +25,16 @@
         "node2": {
             "id": 2,
             "name":"unKTU",
-            "type_node": "transform", 
-            "transform_kof":[
-                27,
-                1
-            ],  
+            "type_node": "transform",
+            "input":{
+                "KTY": 1
+            },
+            "output":{
+                "Product": 27,
+                "Box": 1
+            },
             "effecive_ellements": [
                 {"name":"mashin", "ef":24}
-            ],
-            "type_input":{
-                "type_input_1":"KTY"
-            }, 
-            "type_output":[
-                "Proguct",
-                "Box"
             ],
             "pos":{
                 "x":1,
@@ -55,19 +48,16 @@
         "node3":  {
             "id": 3,
             "name":"Sorting",
-            "type_node": "sort", 
-            "transform_kof":[
-                5
-            ],  
+            "type_node": "sort",
+            "input":{
+                "Product": 1
+            },
+            "output":{
+                "Product": 0.95,
+                "Nonsort": 0.05
+            },
             "effecive_ellements": [
                 {"name":"mashin", "ef":24}
-            ],
-            "type_input":{
-                "type_input_1":"Product"
-            }, 
-            "type_output":[
-                "Nonsort",
-                "Proguct"
             ],
             "pos":{
                 "x":1,
@@ -81,19 +71,36 @@
         "node4":  {
             "id": 4,
             "name":"Pack",
-            "type_node": "pack", 
-            "transform_kof":[
-                27
-            ],  
+            "type_node": "pack",
+            "input":{
+                "Product": 27,
+                "Box": 1
+            },
+            "output":{
+                "KTY": 1
+            },
             "effecive_ellements": [
                 {"name":"mashin", "ef":24}
             ],
-            "type_input":{
-                "type_input_1":"Product",
-                "type_input_2":"Box"
-            }, 
-            "type_output":[
-                "KTY"
+            "pos":{
+                "x":1,
+                "y":1
+            },
+            "scale":{
+                "width":100,
+                "height":100
+            }
+        },
+        "node5":  {
+            "id": 5,
+            "name":"StorageNonsort",
+            "type_node": "Storage",
+            "input":{
+                "Nonsort": 1
+            },
+            "output":{
+            },
+            "effecive_ellements": [
             ],
             "pos":{
                 "x":1,
@@ -107,29 +114,40 @@
     },
     "ribs":{
         "rib1":{
-            "node_in": 1,
-            "node_out": 2, 
+            "node_in_id": 1,
+            "node_out_id": 2,
             "storage": 100,
             "type_el": "KTY"
         },
         "rib2":{
-            "node_in": 2,
-            "node_out": 3, 
+            "node_in_id": 2,
+            "node_out_id": 3,
             "storage": 100,
             "type_el": "Product"
         },
         "rib3":{
-            "node_in": 2,
-            "node_out": 4, 
+            "node_in_id": 2,
+            "node_out_id": 4,
             "storage": 100,
             "type_el": "Box"
         },
         "rib4":{
-            "node_in": 3,
-            "node_out": 4, 
+            "node_in_id": 3,
+            "node_out_id": 4,
             "storage": 100,
             "type_el": "Product"
+        },
+        "rib5":{
+            "node_in_id": 3,
+            "node_out_id": 5,
+            "storage": 100,
+            "type_el": "Nonsort"
         }
     },
-    "input_stream": 100000
+    "input_stream": 100000,
+    "type_input": "Palet",
+    "start_node_id": 1,
+    "type_output": "Box",
+    "end_node_id": 4
+
 }

@@ -1,24 +1,18 @@
 {
     "id": 1,
     "name":"name",
-    "type_node": "", 
-    "transform_kof":[
-        2,
-        2,
-        4
-    ],  
+    "type_node": "",
+    "input":{
+        "EntityTypeA": 1
+    },
+    "output":{
+        "EntityTypeB": 20,
+        "EntityTypeC": 1
+    },
     "effecive_ellements": [
         {"name":"name", "ef":100},
         {"name":"name", "ef":100},
         {"name":"name", "ef":100}
-    ],
-    "type_input":{
-        "type_input_1":""
-    }, 
-    "type_output":[
-        "",
-        "",
-        ""
     ],
     "pos":{
         "x":1,
