@@ -1,13 +1,13 @@
 {
-    "nodes":{
-        "node1": {
+    "nodes":[
+        {
             "id": 1,
             "name":"Depaletizciya",
-            "type_node": "Input",
-            "input":{
+            "type_node": "input_list",
+            "input_list":{
                 "Palet": 1
             },
-            "output":{
+            "output_list":{
                 "KTY": 20
             },
             "effecive_ellements": [
@@ -22,14 +22,14 @@
                 "height":100
             }
         },
-        "node2": {
+        {
             "id": 2,
             "name":"unKTU",
             "type_node": "transform",
-            "input":{
+            "input_list":{
                 "KTY": 1
             },
-            "output":{
+            "output_list":{
                 "Product": 27,
                 "Box": 1
             },
@@ -45,14 +45,14 @@
                 "height":100
             }
         },
-        "node3":  {
+        {
             "id": 3,
             "name":"Sorting",
             "type_node": "sort",
-            "input":{
+            "input_list":{
                 "Product": 1
             },
-            "output":{
+            "output_list":{
                 "Product": 0.95,
                 "Nonsort": 0.05
             },
@@ -68,15 +68,15 @@
                 "height":100
             }
         },
-        "node4":  {
+         {
             "id": 4,
             "name":"Pack",
             "type_node": "pack",
-            "input":{
+            "input_list":{
                 "Product": 27,
                 "Box": 1
             },
-            "output":{
+            "output_list":{
                 "KTY": 1
             },
             "effecive_ellements": [
@@ -91,17 +91,17 @@
                 "height":100
             }
         },
-        "node5":  {
+         {
             "id": 5,
             "name":"StorageNonsort",
             "type_node": "Storage",
-            "input":{
+            "input_list":{
                 "Nonsort": 1
             },
-            "output":{
+            "output_list":{
             },
-            "effecive_ellements": [
-            ],
+            "effecive_ellements": []
+,
             "pos":{
                 "x":1,
                 "y":1
@@ -111,39 +111,39 @@
                 "height":100
             }
         }
-    },
-    "ribs":{
-        "rib1":{
+    ],
+    "ribs":[
+        {
             "node_in_id": 1,
             "node_out_id": 2,
             "storage": 100,
             "type_el": "KTY"
         },
-        "rib2":{
+        {
             "node_in_id": 2,
             "node_out_id": 3,
             "storage": 100,
             "type_el": "Product"
         },
-        "rib3":{
+        {
             "node_in_id": 2,
             "node_out_id": 4,
             "storage": 100,
             "type_el": "Box"
         },
-        "rib4":{
+        {
             "node_in_id": 3,
             "node_out_id": 4,
             "storage": 100,
             "type_el": "Product"
         },
-        "rib5":{
+        {
             "node_in_id": 3,
             "node_out_id": 5,
             "storage": 100,
             "type_el": "Nonsort"
         }
-    },
+    ],
     "input_stream": 100000,
     "type_input": "Palet",
     "start_node_id": 1,
