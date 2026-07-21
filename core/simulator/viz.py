@@ -83,14 +83,19 @@ def collect(m: SortingCenterModel) -> dict:
             })
 
     pack = next((n for n in m.nodes.values() if n.by_direction), None)
-    kty = m._sinks.get("KTY_full") or m._sinks.get("KTY_out")
+    # терминальный сток: что отгружаем (type_output), иначе — сток с макс. числом
+    term = m._sinks.get(m.output_type) if m.output_type else None
+    if term is None and m._sinks:
+        term = max(m._sinks.values(), key=lambda s: s.count)
 
     summary = {
         "input_items_h": round(m.generated / h * 540),
         "sim_hours": round(h, 2),
-        "residence_min": round(statistics.mean(kty.residence) / 60.0, 1)
-        if (kty and kty.residence) else 0.0,
+        "residence_min": round(statistics.mean(term.residence) / 60.0, 1)
+        if (term and term.residence) else 0.0,
     }
+    if term is not None:
+        summary["shipped_per_h"] = round(term.count / h)
     if pack and pack.filled:
         summary["kty_per_h"] = round(pack.filled / h)
         summary["avg_fill"] = round(pack.items_packed / pack.filled, 1)
@@ -158,9 +163,8 @@ HTML = """<meta charset="utf-8">
   .gauge .val small{font-size:12px;color:var(--ink2);font-weight:400}
   .gauge.alert .val{color:var(--crit)}
 
-  .frame{border:1.5px solid var(--ink);background:var(--panel);padding:6px;
-       overflow-x:auto}
-  svg{display:block}
+  .frame{border:1.5px solid var(--ink);background:var(--panel);padding:6px}
+  svg{display:block;width:100%;height:auto}
   .legend{display:flex;gap:20px;flex-wrap:wrap;color:var(--ink2);font-size:11px;
        margin-top:12px;text-transform:uppercase;letter-spacing:.06em}
   .legend .sw{display:inline-block;width:12px;height:12px;vertical-align:-2px;
@@ -217,11 +221,12 @@ document.getElementById('stamp').innerHTML =
 
 // --- приборы ---
 const gauges = [
-  ['Выход', S.kty_per_h!=null ? S.kty_per_h.toLocaleString('ru') : '—', 'КТЯ/ч', false],
+  ['Упаковка', S.kty_per_h!=null ? S.kty_per_h.toLocaleString('ru') : '—', 'КТЯ/ч', false],
+  ['Отгрузка', S.shipped_per_h!=null ? (S.shipped_per_h/16).toFixed(1) : '—', 'машин/ч', false],
   ['Заполнение КТЯ', S.avg_fill!=null ? S.avg_fill : '—', S.batch?('из '+S.batch):'', false],
   ['Недозаполнено', S.underfilled!=null ? S.underfilled : '—', '%', S.underfilled>10],
   ['Ячейки', S.cells!=null ? S.cells : '—', 'шт', false],
-  ['Товар в центре', S.residence_min||'—', 'мин', S.residence_min>30],
+  ['Товар в центре', S.residence_min||'—', 'мин', S.residence_min>60],
   ['Погрузчики', S.haulers || '—', '', false],
 ];
 document.getElementById('gauges').innerHTML = gauges.map(([l,v,u,alert]) =>
@@ -229,7 +234,7 @@ document.getElementById('gauges').innerHTML = gauges.map(([l,v,u,alert]) =>
   `<div class="val">${v} <small>${u}</small></div></div>`).join('');
 
 // --- геометрия схемы ---
-const BW=168, BH=44, PADX=90, PADY=54, W=1180;
+const BW=150, BH=44, PADX=84, PADY=54, W=1560;
 const xs=N.map(n=>n.x), ys=N.map(n=>n.y);
 const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
 

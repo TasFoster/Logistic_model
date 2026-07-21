@@ -195,12 +195,17 @@ class Node:
         while True:
             yield env.timeout(self.flush_check)
             now = env.now
-            for d, b in self.bins.items():
+            # сначала собираем залежавшиеся накопители в снимок, потом выпускаем:
+            # нельзя yield-ить внутри итерации self.bins — feeder может добавить
+            # ключ (новое направление) и уронить цикл "dict changed size".
+            due = []
+            for d, b in list(self.bins.items()):
                 if b and now - b[0][0] >= self.flush_timeout:
-                    items = [en for _, en in b]
+                    due.append((d, [en for _, en in b]))
                     b.clear()
                     self.open_bins -= 1
-                    yield self.ready.put((d, items, False))   # КТЯ недозаполнен
+            for d, items in due:
+                yield self.ready.put((d, items, False))   # КТЯ недозаполнен
 
     def _pack_worker(self, wid: int):
         env = self.env
@@ -474,6 +479,7 @@ class SortingCenterModel:
         self.arrival_rate_h = graph["arrival_rate_h"]
         self.start_node_id = graph.get("start_node_id")
         self.input_type = graph.get("input_type")
+        self.output_type = graph.get("type_output")   # терминальная сущность (что отгружаем)
         self.input_stream = graph.get("input_stream", 100000)
         self.generated = 0
         self.outages = outages or []

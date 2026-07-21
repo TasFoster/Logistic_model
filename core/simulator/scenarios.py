@@ -125,11 +125,15 @@ def run_scenario(raw: dict, sc: dict, hours: float, seed: int,
         if r.level_samples and cap:
             fills.append(100.0 * max(r.level_samples) / cap)
 
-    # время пребывания товара в центре
-    kty_sink = m._sinks.get("KTY_full") or m._sinks.get("KTY_out")
+    # время пребывания товара в центре — до терминального стока (что отгружаем)
+    term = m._sinks.get(m.output_type) if m.output_type else None
+    if term is None:
+        term = m._sinks.get("KTY_full") or m._sinks.get("KTY_out")
+    if term is None and m._sinks:
+        term = max(m._sinks.values(), key=lambda s: s.count)
     import statistics
-    resid = statistics.mean(kty_sink.residence) / 60.0 if (
-        kty_sink and kty_sink.residence) else 0.0
+    resid = statistics.mean(term.residence) / 60.0 if (
+        term and term.residence) else 0.0
 
     return {
         "name": sc["name"],

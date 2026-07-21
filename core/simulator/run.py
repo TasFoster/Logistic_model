@@ -191,6 +191,28 @@ def main() -> None:
         print(f"  возврат в поток    : {back / sim_h:>8.0f} шт/ч (на упаковку, направление определено вручную)")
         print(f"  в роллкейджи       : {rc / sim_h:>8.0f} шт/ч (крупногабарит, на отгрузку)")
 
+    # сводка по выходной стороне (заклейка -> палетизация -> отгрузка)
+    gate = next((n for n in model.nodes.values() if "Pallet" in n.inputs
+                 and n.type != "source"), None)
+    pallet = next((n for n in model.nodes.values()
+                   if any(t.startswith("KTY") for t in n.inputs)
+                   and "Pallet" in n.outputs), None)
+    term = model._sinks.get(model.output_type) if model.output_type else None
+    if gate is not None and term is not None:
+        import statistics as _st
+        cap = gate.workers * model.sim_time
+        shipped = term.count / sim_h
+        print("-" * 68)
+        print("ОТГРУЗКА:")
+        if pallet is not None:
+            print(f"  палетизация        : {pallet.processed / sim_h:>8.0f} палет/ч (по 20 КТЯ)")
+        print(f"  отгружено          : {shipped:>8.0f} палет/ч = {shipped / 16:>4.1f} машин/ч")
+        print(f"  ворота ({gate.workers} шт)      : загрузка {100 * gate.busy / cap:>4.0f}% "
+              f"(машина = 16 палет за 2 ч)")
+        if term.residence:
+            print(f"  товар в центре     : {_st.mean(term.residence) / 60:>8.1f} мин "
+                  f"(от приёмки до отгрузки)")
+
     if written:
         print("-" * 68)
         labels = ", ".join(os.path.basename(p).replace("series_", "").replace(".csv", "")

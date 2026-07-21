@@ -374,6 +374,218 @@
         "height": 100
       }
     },
+    "node10": {
+      "id": 10,
+      "name": "Zaklejka",
+      "type_node": "transform",
+      "_note": "Заклейка КТЯ скотчем. Пропускная способность с запасом над потоком КТЯ.",
+      "input": {
+        "KTY_full": 1
+      },
+      "output": {
+        "KTY_taped": 1
+      },
+      "effecive_ellements": [
+        {
+          "name": "taper",
+          "ef": 2200
+        },
+        {
+          "name": "taper",
+          "ef": 2200
+        }
+      ],
+      "pos": {
+        "x": 6,
+        "y": 2.5
+      },
+      "scale": {
+        "width": 100,
+        "height": 100
+      }
+    },
+    "node11": {
+      "id": 11,
+      "name": "SortKTY",
+      "type_node": "transform",
+      "_note": "Сортировка заклеенных КТЯ по направлениям отгрузки (к воротам). На одной палете затем могут оказаться КТЯ нескольких направлений.",
+      "input": {
+        "KTY_taped": 1
+      },
+      "output": {
+        "KTY_sorted": 1
+      },
+      "effecive_ellements": [
+        {
+          "name": "sorter",
+          "ef": 4200
+        }
+      ],
+      "pos": {
+        "x": 7,
+        "y": 2.5
+      },
+      "scale": {
+        "width": 100,
+        "height": 100
+      }
+    },
+    "node12": {
+      "id": 12,
+      "name": "Palletizaciya",
+      "type_node": "transform",
+      "_note": "Установка КТЯ на палеты: 20 КТЯ -> 1 палета (палета 800x1200, 20 КТЯ).",
+      "input": {
+        "KTY_sorted": 20
+      },
+      "output": {
+        "Pallet": 1
+      },
+      "effecive_ellements": [
+        {
+          "name": "palletizer",
+          "ef": 60
+        },
+        {
+          "name": "palletizer",
+          "ef": 60
+        },
+        {
+          "name": "palletizer",
+          "ef": 60
+        },
+        {
+          "name": "palletizer",
+          "ef": 60
+        }
+      ],
+      "pos": {
+        "x": 8,
+        "y": 2.5
+      },
+      "scale": {
+        "width": 100,
+        "height": 100
+      }
+    },
+    "node13": {
+      "id": 13,
+      "name": "Otgruzka24vorot",
+      "type_node": "transform",
+      "_note": "Отгрузка через 24 ворот. Машина вмещает 32 палеты, но только 16 под КТЯ (остальные — роллкейджи); погрузка одной машины 2 ч. Значит одни ворота грузят 16 палет за 2 ч = 8 палет/ч; время на палету = 7200/16 = 450 с. 24 ворот -> 24 сервера по 450 с/палета = 192 палеты/ч.",
+      "input": {
+        "Pallet": 1
+      },
+      "output": {
+        "Shipped": 1
+      },
+      "effecive_ellements": [
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        },
+        {
+          "name": "gate",
+          "ef": 8
+        }
+      ],
+      "pos": {
+        "x": 9,
+        "y": 2.5
+      },
+      "scale": {
+        "width": 100,
+        "height": 100
+      }
+    },
     "node100": {
       "id": 100,
       "name": "Sort2_g00",
@@ -948,6 +1160,30 @@
       "pool": "forklift",
       "batch": 20
     },
+    "rib_pack_zak": {
+      "node_in_id": 4,
+      "node_out_id": 10,
+      "storage": 500,
+      "type_el": "KTY_full"
+    },
+    "rib_zak_sort": {
+      "node_in_id": 10,
+      "node_out_id": 11,
+      "storage": 500,
+      "type_el": "KTY_taped"
+    },
+    "rib_sort_pal": {
+      "node_in_id": 11,
+      "node_out_id": 12,
+      "storage": 800,
+      "type_el": "KTY_sorted"
+    },
+    "rib_pal_gate": {
+      "node_in_id": 12,
+      "node_out_id": 13,
+      "storage": 400,
+      "type_el": "Pallet"
+    },
     "rib_s1_g00": {
       "node_in_id": 3,
       "node_out_id": 100,
@@ -1234,6 +1470,6 @@
   "input_stream": 100000,
   "type_input": "Palet",
   "start_node_id": 1,
-  "type_output": "KTY_full",
-  "end_node_id": 4
+  "type_output": "Shipped",
+  "end_node_id": 13
 }
