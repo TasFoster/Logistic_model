@@ -1,12 +1,10 @@
 """
-2D-визуализация сортировочного центра: план, потоки, тепловая карта загрузки.
+2D-схема сортировочного центра по результатам прогона имитационной модели.
 
-Строит один самодостаточный HTML-файл (без внешних зависимостей и интернета):
-    - узлы размещены по координатам pos из графа;
-    - цвет узла — тепловая карта загрузки (зелёный -> жёлтый -> красный);
-    - рамка узла подсвечивает проблему: блокировка (красный), отказ (чёрный);
-    - толщина ребра — интенсивность потока, цвет — пиковая заполненность буфера;
-    - панель метрик, узкое место, оборот тары, заполняемость КТЯ.
+Строит один самодостаточный HTML-файл (без интернета и внешних библиотек — важно
+для проверки на изолированном сервере). Оформление — техническая схема цеха:
+аппараты-блоки с тегами, ортогональные конвейеры со стрелками направления, сетка,
+моноширинная типографика. Цвет заголовка блока и полоса внизу — загрузка узла.
 
 Запуск:
     python -m core.simulator.viz --graph core/simulator/graph_2stage.json --hours 3
@@ -67,10 +65,22 @@ def collect(m: SortingCenterModel) -> dict:
             "src": r.src, "dst": r.dst, "etype": r.etype,
             "flow": round(r.passed / h), "cap": cap,
             "fill": round(fill, 1), "travel": round(r.travel, 1),
-            "group": r.dest_group,
-            "shared": key in seen,
+            "hauled": bool(r.pool), "virtual": False,
         })
         seen.add(key)
+
+    # источники (машина новых КТЯ) кладут тару прямо в буфер, минуя ребро графа —
+    # рисуем пунктирную связь до узла, буфер которого они восполняют
+    for n in m.nodes.values():
+        if n.type != "source":
+            continue
+        rib = m._rib_by_name.get(n.params.get("target_rib", ""))
+        if rib is not None:
+            ribs.append({
+                "src": n.id, "dst": rib.dst, "etype": n.params.get("emit_type", ""),
+                "flow": round(n.produced / h), "cap": 0, "fill": 0.0,
+                "travel": 0.0, "hauled": False, "virtual": True,
+            })
 
     pack = next((n for n in m.nodes.values() if n.by_direction), None)
     kty = m._sinks.get("KTY_full") or m._sinks.get("KTY_out")
@@ -78,7 +88,6 @@ def collect(m: SortingCenterModel) -> dict:
     summary = {
         "input_items_h": round(m.generated / h * 540),
         "sim_hours": round(h, 2),
-        "outputs": {k: round(v.count / h) for k, v in sorted(m._sinks.items())},
         "residence_min": round(statistics.mean(kty.residence) / 60.0, 1)
         if (kty and kty.residence) else 0.0,
     }
@@ -92,153 +101,224 @@ def collect(m: SortingCenterModel) -> dict:
         summary["directions"] = m.directions.count
         summary["groups"] = m.directions.groups
         summary["grouping"] = m.directions.grouping
+    if m.pools:
+        name = next(iter(m.pools))
+        res = m.pools[name]
+        util = 100.0 * m.pool_busy[name] / (res.capacity * m.sim_time) if res.capacity else 0.0
+        summary["haulers"] = f"{res.capacity} ед · {util:.0f}%"
 
-    # узкое место: максимум (работа + блокировка)
     cand = [n for n in nodes if n["type"] != "source"]
     if cand:
         b = max(cand, key=lambda n: n["busy"] + n["blocked"])
-        summary["bottleneck"] = f"{b['name']} ({b['busy']:.0f}% работа + {b['blocked']:.0f}% блокировка)"
+        summary["bottleneck"] = b["name"]
+        summary["bottleneck_load"] = round(b["busy"] + b["blocked"], 1)
 
     return {"nodes": nodes, "ribs": ribs, "summary": summary}
 
 
 HTML = """<meta charset="utf-8">
-<title>План сортировочного центра</title>
+<title>Сортировочный центр — схема потоков</title>
 <style>
-  :root{--bg:#0f1115;--fg:#e8eaed;--mut:#9aa0a6;--card:#171a20;--line:#2a2f3a}
-  @media (prefers-color-scheme: light){
-    :root{--bg:#f7f8fa;--fg:#1a1d21;--mut:#5f6368;--card:#fff;--line:#dfe1e5}
+  :root{
+    --paper:#e7e4da; --panel:#faf9f4; --ink:#1b2733; --ink2:#63707c;
+    --line:#c6c2b6; --grid:#d6d2c6; --edge:#35618e; --edge2:#8aa6c4;
+    --ok:#3f7d54; --warm:#c1871c; --crit:#b23a2c; --down:#3a4149;
+    --mono:'Cascadia Mono','JetBrains Mono',Consolas,'DejaVu Sans Mono',monospace;
   }
-  body{margin:0;background:var(--bg);color:var(--fg);
-       font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-  .wrap{max-width:1280px;margin:0 auto;padding:24px}
-  h1{font-size:20px;margin:0 0 4px}
-  .sub{color:var(--mut);margin-bottom:20px}
-  .cards{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
-        padding:12px 16px;min-width:150px}
-  .card .k{color:var(--mut);font-size:12px}
-  .card .v{font-size:20px;font-weight:600;margin-top:2px}
-  .plan{background:var(--card);border:1px solid var(--line);border-radius:10px;
-        padding:12px;overflow-x:auto}
-  svg{display:block;min-width:900px;width:100%;height:auto}
-  .legend{display:flex;gap:18px;flex-wrap:wrap;color:var(--mut);
-          font-size:12px;margin-top:12px}
-  .sw{display:inline-block;width:12px;height:12px;border-radius:3px;
-      vertical-align:-2px;margin-right:5px}
-  .tip{position:fixed;pointer-events:none;background:#000;color:#fff;padding:8px 10px;
-       border-radius:6px;font-size:12px;opacity:0;transition:opacity .1s;z-index:9;
-       white-space:pre;line-height:1.45}
-  text{font:11px system-ui,sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--mono);
+       font-size:13px;line-height:1.4;
+       background-image:linear-gradient(var(--grid) 1px,transparent 1px),
+                        linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+       background-size:26px 26px;background-position:-1px -1px}
+  .sheet{max-width:1200px;margin:0 auto;padding:22px}
+
+  /* заголовок как штамп чертежа */
+  .titleblock{border:1.5px solid var(--ink);background:var(--panel);
+       display:flex;align-items:stretch;margin-bottom:16px}
+  .titleblock .main{padding:12px 16px;border-right:1.5px solid var(--ink);flex:1}
+  .titleblock h1{margin:0;font-size:15px;letter-spacing:.14em;text-transform:uppercase;
+       font-weight:700}
+  .titleblock .sub{color:var(--ink2);font-size:12px;margin-top:4px}
+  .titleblock .stamp{padding:12px 16px;display:flex;flex-direction:column;
+       justify-content:center;min-width:190px}
+  .titleblock .stamp .row{display:flex;justify-content:space-between;gap:14px}
+  .titleblock .stamp .k{color:var(--ink2);text-transform:uppercase;font-size:10px;
+       letter-spacing:.1em}
+  .titleblock .stamp .v{font-weight:700}
+
+  /* приборная панель */
+  .gauges{display:flex;border:1.5px solid var(--ink);background:var(--panel);
+       margin-bottom:16px;flex-wrap:wrap}
+  .gauge{padding:10px 16px;border-right:1px solid var(--line);flex:1;min-width:150px}
+  .gauge:last-child{border-right:none}
+  .gauge .lbl{color:var(--ink2);text-transform:uppercase;font-size:10px;
+       letter-spacing:.12em;margin-bottom:5px}
+  .gauge .val{font-size:20px;font-weight:700;letter-spacing:.02em}
+  .gauge .val small{font-size:12px;color:var(--ink2);font-weight:400}
+  .gauge.alert .val{color:var(--crit)}
+
+  .frame{border:1.5px solid var(--ink);background:var(--panel);padding:6px;
+       overflow-x:auto}
+  svg{display:block}
+  .legend{display:flex;gap:20px;flex-wrap:wrap;color:var(--ink2);font-size:11px;
+       margin-top:12px;text-transform:uppercase;letter-spacing:.06em}
+  .legend .sw{display:inline-block;width:12px;height:12px;vertical-align:-2px;
+       margin-right:6px;border:1px solid var(--ink)}
+  .legend .ln{display:inline-block;width:20px;height:0;vertical-align:middle;
+       margin-right:6px;border-top:3px solid var(--edge)}
+
+  .tip{position:fixed;pointer-events:none;background:var(--ink);color:#f4f2ec;
+       padding:7px 9px;font-size:11px;opacity:0;transition:opacity .08s;z-index:9;
+       white-space:pre;line-height:1.5;border:1px solid #000;font-family:var(--mono)}
+  text{font-family:var(--mono)}
 </style>
-<div class="wrap">
-  <h1>План сортировочного центра</h1>
-  <div class="sub" id="sub"></div>
-  <div class="cards" id="cards"></div>
-  <div class="plan"><svg id="svg"></svg></div>
+
+<div class="sheet">
+  <div class="titleblock">
+    <div class="main">
+      <h1>Сортировочный центр · имитационная модель</h1>
+      <div class="sub" id="sub"></div>
+    </div>
+    <div class="stamp" id="stamp"></div>
+  </div>
+
+  <div class="gauges" id="gauges"></div>
+
+  <div class="frame"><svg id="svg"></svg></div>
+
   <div class="legend">
-    <span><i class="sw" style="background:#34a853"></i>загрузка &lt;70%</span>
-    <span><i class="sw" style="background:#fbbc04"></i>70–90%</span>
-    <span><i class="sw" style="background:#ea4335"></i>&gt;90% — узкое место</span>
-    <span><i class="sw" style="background:#000;border:1px solid #888"></i>отказ</span>
-    <span><i class="sw" style="background:#8ab4f8"></i>толщина ребра — поток</span>
-    <span><i class="sw" style="background:#ea4335"></i>красное ребро — буфер переполнен</span>
+    <span><i class="sw" style="background:var(--ok)"></i>загрузка &lt;70%</span>
+    <span><i class="sw" style="background:var(--warm)"></i>70–90%</span>
+    <span><i class="sw" style="background:var(--crit)"></i>&gt;90% узкое место</span>
+    <span><i class="sw" style="background:var(--down)"></i>отказ</span>
+    <span><i class="ln"></i>конвейер · толщина = поток</span>
+    <span><i class="ln" style="border-top-style:dashed;border-top-color:var(--ink2)"></i>подача тары</span>
   </div>
 </div>
 <div class="tip" id="tip"></div>
+
 <script>
 const DATA = __DATA__;
 const S = DATA.summary, N = DATA.nodes, R = DATA.ribs;
+const css = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+const C = {ok:css('--ok'),warm:css('--warm'),crit:css('--crit'),down:css('--down'),
+           edge:css('--edge'),edge2:css('--edge2'),ink:css('--ink'),ink2:css('--ink2'),
+           line:css('--line'),panel:css('--panel')};
 
+// --- штамп + подпись ---
 document.getElementById('sub').textContent =
   `Вход ${S.input_items_h.toLocaleString('ru')} товаров/ч · горизонт ${S.sim_hours} ч` +
-  (S.directions ? ` · ${S.directions} направлений` : '') +
-  (S.groups ? ` · ${S.groups} групп (${S.grouping})` : '');
+  (S.directions ? ` · ${S.directions} направлений (${S.groups}×${S.directions/S.groups})` : '');
+document.getElementById('stamp').innerHTML =
+  `<div class="row"><span class="k">Узел-ограничитель</span></div>` +
+  `<div class="row"><span class="v">${S.bottleneck||'—'}</span>` +
+  `<span class="v">${S.bottleneck_load!=null?S.bottleneck_load+'%':''}</span></div>`;
 
-const cards = [
-  ['Узкое место', S.bottleneck || '—'],
-  ['Выход КТЯ', S.kty_per_h ? S.kty_per_h.toLocaleString('ru') + ' шт/ч' : '—'],
-  ['Заполненность КТЯ', S.avg_fill ? `${S.avg_fill} / ${S.batch}` : '—'],
-  ['Недозаполнено', S.underfilled !== undefined ? S.underfilled + '%' : '—'],
-  ['Ячеек-накопителей', S.cells || '—'],
-  ['Товар в центре', S.residence_min ? S.residence_min + ' мин' : '—'],
+// --- приборы ---
+const gauges = [
+  ['Выход', S.kty_per_h!=null ? S.kty_per_h.toLocaleString('ru') : '—', 'КТЯ/ч', false],
+  ['Заполнение КТЯ', S.avg_fill!=null ? S.avg_fill : '—', S.batch?('из '+S.batch):'', false],
+  ['Недозаполнено', S.underfilled!=null ? S.underfilled : '—', '%', S.underfilled>10],
+  ['Ячейки', S.cells!=null ? S.cells : '—', 'шт', false],
+  ['Товар в центре', S.residence_min||'—', 'мин', S.residence_min>30],
+  ['Погрузчики', S.haulers || '—', '', false],
 ];
-document.getElementById('cards').innerHTML = cards.map(([k,v]) =>
-  `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+document.getElementById('gauges').innerHTML = gauges.map(([l,v,u,alert]) =>
+  `<div class="gauge${alert?' alert':''}"><div class="lbl">${l}</div>`+
+  `<div class="val">${v} <small>${u}</small></div></div>`).join('');
 
-// --- геометрия ---
-// Высота холста считается от плотности узлов: в колонке 2-й стадии их 20, и при
-// фиксированной высоте блоки наезжали друг на друга.
-const NH = 34, GAP = 8, PAD = 70, W = 1180;
-const xs = N.map(n=>n.x), ys = N.map(n=>n.y);
-const x0=Math.min(...xs), x1=Math.max(...xs), y0=Math.min(...ys), y1=Math.max(...ys);
+// --- геометрия схемы ---
+const BW=168, BH=44, PADX=90, PADY=54, W=1180;
+const xs=N.map(n=>n.x), ys=N.map(n=>n.y);
+const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
 
-// Высота: самая плотная колонка занимает лишь ЧАСТЬ вертикального диапазона
-// (ниже неё есть другие узлы), поэтому холст растягиваем с учётом этой доли —
-// иначе блоков в колонке не хватает места и они наезжают.
-const cols = {};
-for (const n of N) { const k = n.x.toFixed(2); (cols[k] = cols[k] || []).push(n); }
-const span = y1 - y0 || 1;
-let need = 620;
-for (const c of Object.values(cols)) {
-  if (c.length < 2) continue;
-  const cy = c.map(n => n.y);
-  const frac = Math.max((Math.max(...cy) - Math.min(...cy)) / span, 1e-6);
-  need = Math.max(need, c.length * (NH + GAP) / frac + 2 * PAD);
+// Вертикаль: одинаковый шаг между соседними ЗАНЯТЫМИ уровнями, большие пустые
+// промежутки сжимаем — иначе 20 секций растягивают холст и появляются пустоты.
+const uy=[...new Set(N.map(n=>n.y))].sort((a,b)=>a-b);
+let dense=Infinity;
+for(let i=1;i<uy.length;i++) dense=Math.min(dense,uy[i]-uy[i-1]);
+if(!isFinite(dense)||dense<=0) dense=1;
+const ROW=BH+16;                       // шаг между соседними уровнями, px
+const rowY={}; let py=PADY;
+for(let i=0;i<uy.length;i++){
+  if(i>0){
+    const g=uy[i]-uy[i-1];
+    py+=Math.max(ROW, Math.min(g/dense*ROW, 2.2*ROW));   // мелкий шаг=ROW, большие сжаты
+  }
+  rowY[uy[i].toFixed(4)]=py;
 }
-const H = Math.ceil(need);
+const H=Math.ceil(py+PADY);
+const sx=v=>PADX+(x1===x0?.5:(v-x0)/(x1-x0))*(W-2*PADX);
+const sy=v=>rowY[v.toFixed(4)] ?? (PADY+(v-y0)/(y1-y0||1)*(H-2*PADY));
 
-const sx = v => PAD + (x1===x0?0.5:(v-x0)/(x1-x0)) * (W-2*PAD);
-const sy = v => PAD + (y1===y0?0.5:(v-y0)/(y1-y0)) * (H-2*PAD);
+const status=n=>{const l=n.busy+n.blocked;
+  return n.down>1?C.down:l>90?C.crit:l>70?C.warm:C.ok;};
+const maxFlow=Math.max(1,...R.filter(r=>!r.virtual).map(r=>r.flow));
+const byId=Object.fromEntries(N.map(n=>[n.id,n]));
 
-const load = n => n.busy + n.blocked;
-const heat = n => { const l=load(n);
-  return n.down>1 ? '#000' : l>90 ? '#ea4335' : l>70 ? '#fbbc04' : '#34a853'; };
-const maxFlow = Math.max(1, ...R.map(r=>r.flow));
+const svg=document.getElementById('svg');
+svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+svg.setAttribute('width',W); svg.setAttribute('height',H);
+let out='';
 
-const svg = document.getElementById('svg');
-svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-const byId = Object.fromEntries(N.map(n=>[n.id,n]));
-let out = '';
-
-// рёбра
-for (const r of R) {
-  const a = byId[r.src], b = byId[r.dst];
-  if (!a || !b) continue;
-  const w = 1 + 7 * Math.sqrt(r.flow / maxFlow);
-  const col = r.fill > 95 ? '#ea4335' : r.fill > 60 ? '#fbbc04' : '#8ab4f8';
-  const op  = r.fill > 95 ? 0.95 : 0.5;
-  const HW = 74;                                  // половина ширины блока
-  const ax = sx(a.x) + (sx(b.x) > sx(a.x) ? HW : -HW);
-  const bx = sx(b.x) + (sx(b.x) > sx(a.x) ? -HW : HW);
-  out += `<line x1="${ax}" y1="${sy(a.y)}" x2="${bx}" y2="${sy(b.y)}"
-    stroke="${col}" stroke-width="${w.toFixed(1)}" opacity="${op}"
-    data-tip="${r.etype}: ${r.flow.toLocaleString('ru')} шт/ч&#10;буфер ${r.fill}% (ёмкость ${r.cap})&#10;в пути ${r.travel} с"/>`;
+// --- конвейеры: ортогональная разводка (Г-образные колена) ---
+for(const r of R){
+  const a=byId[r.src], b=byId[r.dst]; if(!a||!b)continue;
+  const acx=sx(a.x), bcx=sx(b.x), ay=sy(a.y), by=sy(b.y);
+  const ax = bcx>acx ? acx+BW/2 : acx-BW/2;
+  const bx = bcx>acx ? bcx-BW/2 : bcx+BW/2;
+  const midx=(ax+bx)/2;
+  const d=`M ${ax} ${ay} H ${midx} V ${by} H ${bx}`;
+  if(r.virtual){
+    out+=`<path d="${d}" fill="none" stroke="${C.ink2}" stroke-width="1.4"
+      stroke-dasharray="3 4" opacity=".8"
+      data-tip="подача тары: ${r.flow.toLocaleString('ru')} шт/ч"/>`;
+  }else{
+    const w=1.4+6*Math.sqrt(r.flow/maxFlow);
+    const col=r.fill>95?C.crit:C.edge;
+    out+=`<path d="${d}" fill="none" stroke="${col}" stroke-width="${w.toFixed(1)}"
+      opacity="${r.fill>95?.95:.62}" stroke-linejoin="miter"
+      data-tip="${r.etype}: ${r.flow.toLocaleString('ru')} шт/ч&#10;буфер ${r.fill}% (ёмкость ${r.cap})&#10;${r.hauled?'везёт погрузчик · ':''}в пути ${r.travel} с"/>`;
+    // стрелка направления у приёмника
+    const dir=bx>midx?1:-1;
+    out+=`<path d="M ${bx} ${by} l ${-7*dir} -4 l 0 8 z" fill="${col}" opacity=".85"/>`;
+  }
 }
-// узлы: имя и поток в одну строку — так влезают все 20 секций без наложения
-for (const n of N) {
-  const w = 148, h = NH, x = sx(n.x)-w/2, y = sy(n.y)-h/2;
-  const stroke = n.down>1 ? '#fff' : n.blocked>20 ? '#ea4335' : 'transparent';
-  out += `<g data-tip="${n.name} (${n.type})&#10;поток ${n.thr.toLocaleString('ru')} шт/ч из ${n.capacity.toLocaleString('ru')} шт/ч&#10;работа ${n.busy}% · блокировка ${n.blocked}%&#10;голодание ${n.starved}% · отказ ${n.down}%">
-    <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="7"
-      fill="${heat(n)}" stroke="${stroke}" stroke-width="2"/>
-    <text x="${x+9}" y="${sy(n.y)+4}" fill="#fff" font-weight="600">${n.name}</text>
-    <text x="${x+w-9}" y="${sy(n.y)+4}" text-anchor="end" fill="#fff" opacity=".85">${n.thr.toLocaleString('ru')}/ч</text>
+
+// --- аппараты (узлы) ---
+for(const n of N){
+  const cx=sx(n.x), cy=sy(n.y), x=cx-BW/2, y=cy-BH/2, col=status(n);
+  const load=Math.min(100,n.busy+n.blocked);
+  const tip=`${n.name} · ${n.type}&#10;поток ${n.thr.toLocaleString('ru')} шт/ч из `+
+    `${n.capacity.toLocaleString('ru')} шт/ч (${n.workers} ед.)&#10;`+
+    `работа ${n.busy}% · блокировка ${n.blocked}% · голодание ${n.starved}%`+
+    (n.down>0?` · отказ ${n.down}%`:'');
+  out+=`<g data-tip="${tip}">
+    <rect x="${x}" y="${y}" width="${BW}" height="${BH}" fill="${C.panel}"
+      stroke="${C.ink}" stroke-width="1.4"/>
+    <rect x="${x}" y="${y}" width="${BW}" height="15" fill="${col}"/>
+    <text x="${x+8}" y="${y+11}" font-size="10.5" font-weight="700" fill="#fbfaf4"
+      letter-spacing=".04em">${n.name}</text>
+    <text x="${x+8}" y="${y+33}" font-size="13" font-weight="700" fill="${C.ink}">${n.thr.toLocaleString('ru')}<tspan font-size="9" fill="${C.ink2}"> /ч</tspan></text>
+    <text x="${x+BW-8}" y="${y+33}" text-anchor="end" font-size="9" fill="${C.ink2}">${Math.round(load)}%</text>
+    <rect x="${x}" y="${y+BH-4}" width="${BW}" height="4" fill="${C.line}"/>
+    <rect x="${x}" y="${y+BH-4}" width="${(BW*load/100).toFixed(1)}" height="4" fill="${col}"/>
   </g>`;
 }
-svg.innerHTML = out;
+svg.innerHTML=out;
 
-// подсказки
-const tip = document.getElementById('tip');
-svg.addEventListener('mousemove', e => {
-  const el = e.target.closest('[data-tip]');
-  if (!el) { tip.style.opacity = 0; return; }
-  tip.textContent = el.getAttribute('data-tip');
-  tip.style.left = (e.clientX + 14) + 'px';
-  tip.style.top  = (e.clientY + 14) + 'px';
-  tip.style.opacity = 1;
+// --- подсказки ---
+const tip=document.getElementById('tip');
+svg.addEventListener('mousemove',e=>{
+  const el=e.target.closest('[data-tip]');
+  if(!el){tip.style.opacity=0;return;}
+  tip.textContent=el.getAttribute('data-tip');
+  tip.style.left=(e.clientX+14)+'px';
+  tip.style.top=(e.clientY+14)+'px';
+  tip.style.opacity=1;
 });
-svg.addEventListener('mouseleave', () => tip.style.opacity = 0);
+svg.addEventListener('mouseleave',()=>tip.style.opacity=0);
 </script>
 """
 
@@ -263,7 +343,8 @@ def main() -> None:
         f.write(html)
 
     print(f"Схема: {os.path.abspath(args.out)}")
-    print(f"Узкое место: {data['summary'].get('bottleneck', '—')}")
+    print(f"Узел-ограничитель: {data['summary'].get('bottleneck', '—')} "
+          f"({data['summary'].get('bottleneck_load', 0)}%)")
 
 
 if __name__ == "__main__":

@@ -398,6 +398,39 @@ def test_forklift_shortage_chokes_line():
         f"нехватка погрузчиков не сказалась на выходе: {starved} против {normal}"
 
 
+def test_loads_tasfoster_contract_format():
+    """Загрузчик читает актуальный контракт: узлы СПИСКОМ + input_list/output_list.
+
+    TasFoster перевёл общую схему на список узлов и поля *_list; модель обязана
+    понимать её без переделки, иначе его граф в симуляторе не запускается.
+    """
+    from .graph_loader import normalize
+    raw = {
+        "nodes": [
+            {"id": 1, "name": "Vhod", "type_node": "input_list",
+             "input_list": {"Palet": 1}, "output_list": {"KTY": 20},
+             "effecive_ellements": [{"name": "people", "ef": 300}],
+             "pos": {"x": 1, "y": 1}, "scale": {"width": 100, "height": 100}},
+            {"id": 2, "name": "Vskr", "type_node": "transform",
+             "input_list": {"KTY": 1}, "output_list": {"Product": 27},
+             "effecive_ellements": [{"name": "m", "ef": 5000}],
+             "pos": {"x": 2, "y": 1}, "scale": {"width": 100, "height": 100}},
+        ],
+        "ribs": [{"node_in_id": 1, "node_out_id": 2, "storage": 100, "type_el": "KTY"}],
+        "input_stream": 100000, "type_input": "Palet", "start_node_id": 1,
+    }
+    g = normalize(raw)
+    assert len(g["nodes"]) == 2, "узлы-список не разобраны"
+    n1 = g["nodes"][1]
+    assert n1["type"] == "Input", "type_node 'input_list' не приведён к Input"
+    assert n1["inputs"] == {"Palet": 1} and n1["outputs"] == {"KTY": 20}, \
+        "поля input_list/output_list не прочитаны"
+    assert len(g["ribs"]) == 1 and g["ribs"][0]["src"] == 1, "рёбра-список не разобраны"
+
+    m = SortingCenterModel(g, seed=42, warmup_s=60.0).run(hours=0.3)
+    assert m.generated > 0, "модель не запустилась на контрактном формате"
+
+
 def _main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

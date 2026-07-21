@@ -35,7 +35,9 @@ def load_json(path: str) -> dict:
 
 def _node_inputs(n: dict) -> dict[str, float]:
     """Входы узла: {тип сущности: сколько нужно на одно срабатывание}."""
-    if "input" in n:                       # схема контракта
+    if "input_list" in n:                  # схема контракта (актуальная)
+        return dict((n["input_list"] or {}))
+    if "input" in n:                       # схема контракта (прежняя)
         return {k: v for k, v in (n["input"] or {}).items()}
     # ранняя схема: type_input + assembly
     in_types = list((n.get("type_input") or {}).values())
@@ -50,7 +52,9 @@ def _node_outputs(n: dict) -> dict[str, float]:
     выбранную по долям (сортировка: 0.95 Product / 0.05 Nonsort).
     Количества (>=1) — детерминированное размножение (вскрытие: 27 Product + 1 Box).
     """
-    if "output" in n:                      # схема контракта
+    if "output_list" in n:                 # схема контракта (актуальная)
+        return dict((n["output_list"] or {}))
+    if "output" in n:                      # схема контракта (прежняя)
         return {k: v for k, v in (n["output"] or {}).items()}
 
     # ранняя схема: type_output + transform_kof, доли жили в params
@@ -124,10 +128,25 @@ def _travel_time(raw: dict, rib: dict, src_pos: dict, dst_pos: dict) -> float:
     return dist_m / speed + handling
 
 
+def _iter_nodes(raw: dict):
+    """Узлы графа — либо словарь {node1: {...}}, либо список [{...}]
+    (TasFoster перевёл контракт на список). Возвращаем сами объекты узлов."""
+    nodes = raw.get("nodes") or {}
+    return list(nodes.values()) if isinstance(nodes, dict) else list(nodes)
+
+
+def _iter_ribs(raw: dict):
+    """Рёбра — словарь {rib1: {...}} или список [{...}]. Возвращаем (имя, объект)."""
+    ribs = raw.get("ribs") or {}
+    if isinstance(ribs, dict):
+        return list(ribs.items())
+    return [(r.get("name", f"rib{i + 1}"), r) for i, r in enumerate(ribs)]
+
+
 def _ribs(raw: dict) -> list[dict]:
-    pos = {n["id"]: n.get("pos", {}) for n in (raw.get("nodes") or {}).values()}
+    pos = {n["id"]: n.get("pos", {}) for n in _iter_nodes(raw)}
     out = []
-    for name, r in (raw.get("ribs") or {}).items():
+    for name, r in _iter_ribs(raw):
         src = r.get("node_in_id", r.get("node_in"))
         dst = r.get("node_out_id", r.get("node_out"))
         out.append({
@@ -155,8 +174,10 @@ def normalize(raw: dict, scenario: dict | None = None) -> dict:
     default_service = scenario.get("default_service_s", 30.0)
 
     nodes: dict[int, dict] = {}
-    for n in (raw.get("nodes") or {}).values():
+    for n in _iter_nodes(raw):
         ntype = n.get("type_node", "transform")
+        if ntype == "input_list":          # алиас точки входа в контракте TasFoster
+            ntype = "Input"
         workers, services = _node_resources(n)
 
         # Явное время в узле или в сценарии перекрывает расчёт из производительности.
