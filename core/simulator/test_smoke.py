@@ -402,6 +402,31 @@ def test_forklift_shortage_chokes_line():
         f"нехватка погрузчиков не сказалась на выходе: {starved} против {normal}"
 
 
+def test_direction_sample_never_out_of_range():
+    """Выборка направления не выходит за границу массива даже на краю [0,1).
+
+    Из-за плавающей точки сумма вероятностей может быть чуть < 1.0; без зажима
+    bisect для r близкого к 1 вернул бы индекс count -> IndexError на длинном прогоне.
+    """
+    from .directions import DirectionProfile
+
+    prof = DirectionProfile(count=400)
+
+    class _RNG:
+        def __init__(self, vals):
+            self.vals, self.i = vals, 0
+
+        def random(self):
+            v = self.vals[self.i % len(self.vals)]
+            self.i += 1
+            return v
+
+    rng = _RNG([0.0, 0.5, 0.9999999999, 1.0 - 1e-16, prof._cum[-1], prof._cum[-1] + 1e-9])
+    for _ in range(30):
+        d = prof.sample(rng)
+        assert 0 <= d < prof.count, f"направление вне диапазона: {d}"
+
+
 def test_outbound_ships_through_gates():
     """Выходная сторона доводит поток до отгрузки: заклейка -> сортКТЯ ->
     палетизация -> 24 ворот. Раньше модель обрывалась на упаковке."""

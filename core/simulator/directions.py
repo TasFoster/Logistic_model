@@ -101,7 +101,9 @@ class DirectionProfile:
 
     # --- выборка направления ---
     def sample(self, rng: random.Random) -> int:
-        return bisect.bisect_left(self._cum, rng.random())
+        # зажим: из-за плавающей точки сумма вероятностей может быть чуть < 1.0,
+        # и тогда bisect для r близкого к 1 вернул бы count (выход за границу).
+        return min(bisect.bisect_left(self._cum, rng.random()), self.count - 1)
 
     # --- справка для отчёта ---
     def share_of_top(self, top_share: float | None = None) -> float:
