@@ -634,6 +634,12 @@ class SortingCenterModel:
         self.env.run(until=self.sim_time)
         for n in self.nodes.values():
             n.settle(self.env.now)     # досчитать незавершённое время воркеров
+        # финальный снимок счётчиков: сэмплер по минутам не срабатывает на самой
+        # границе env.run, поэтому за 24 ч выходит 1439 минут вместо 1440 и агрегаты
+        # 12ч/24ч собираются не полностью. Дописываем последнюю минуту вручную.
+        for n in self.nodes.values():
+            n.proc_series.append(n.produced if n.type == "source" else n.processed)
+        self.sink_series.append({k: v.count for k, v in self._sinks.items()})
         return self
 
 
