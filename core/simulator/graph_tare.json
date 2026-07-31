@@ -1,0 +1,93 @@
+{
+    "schema_version": "0.2-sim",
+    "_comment": "Граф с замкнутым циклом оборота тары 80/20 (Концепция, раздел 4). Расширяет graph_mini.json: упаковка со сборкой (27 товаров + 1 КТЯ -> 1 полный КТЯ), развилка тары 80% реюз / 20% брак, машина новых КТЯ (source) восполняет дефицит. Схема совместима с config/, добавлены поля service_time_s, params, assembly (см. README, 'Пробелы схемы').",
+    "nodes": {
+        "node1": {
+            "id": 1,
+            "name": "Priyomka",
+            "type_node": "Input",
+            "transform_kof": [20],
+            "effecive_ellements": [{"name": "people", "ef": 20}],
+            "service_time_s": 30,
+            "type_input": {"type_input_1": "Palet"},
+            "type_output": ["KTY"],
+            "pos": {"x": 1, "y": 1},
+            "scale": {"width": 100, "height": 100}
+        },
+        "node2": {
+            "id": 2,
+            "name": "Vskrytie_KTY",
+            "type_node": "transform",
+            "transform_kof": [27, 1],
+            "effecive_ellements": [{"name": "machine", "ef": 40}],
+            "service_time_s": 30,
+            "type_input": {"type_input_1": "KTY"},
+            "type_output": ["Product", "EmptyKTY"],
+            "pos": {"x": 2, "y": 1},
+            "scale": {"width": 100, "height": 100}
+        },
+        "node3": {
+            "id": 3,
+            "name": "Sortirovka",
+            "type_node": "sort",
+            "transform_kof": [1],
+            "effecive_ellements": [{"name": "machine", "ef": 600}],
+            "service_time_s": 24,
+            "params": {"nonsort_share": 0.05},
+            "type_input": {"type_input_1": "Product"},
+            "type_output": ["Product"],
+            "pos": {"x": 3, "y": 1},
+            "scale": {"width": 100, "height": 100}
+        },
+        "node4": {
+            "id": 4,
+            "name": "Upakovka",
+            "type_node": "pack",
+            "transform_kof": [1],
+            "effecive_ellements": [{"name": "machine", "ef": 40}],
+            "service_time_s": 30,
+            "assembly": {"Product": 27, "EmptyKTY": 1},
+            "type_input": {"type_input_1": "Product", "type_input_2": "EmptyKTY"},
+            "type_output": ["KTY_out"],
+            "pos": {"x": 4, "y": 1},
+            "scale": {"width": 100, "height": 100}
+        },
+        "node5": {
+            "id": 5,
+            "name": "Razvilka_tary",
+            "type_node": "split",
+            "transform_kof": [1],
+            "effecive_ellements": [{"name": "machine", "ef": 4}],
+            "service_time_s": 1,
+            "params": {"routes": [
+                {"type": "EmptyKTY", "share": 0.8},
+                {"type": "Brak", "share": 0.2}
+            ]},
+            "type_input": {"type_input_1": "EmptyKTY"},
+            "type_output": ["EmptyKTY", "Brak"],
+            "pos": {"x": 2, "y": 3},
+            "scale": {"width": 100, "height": 100}
+        },
+        "node6": {
+            "id": 6,
+            "name": "Mashina_novyh_KTY",
+            "type_node": "source",
+            "transform_kof": [1],
+            "effecive_ellements": [{"name": "machine", "ef": 1}],
+            "service_time_s": 1,
+            "params": {"emit_type": "EmptyKTY", "target_rib": "rib5", "low": 40, "poll": 1.0},
+            "type_input": {},
+            "type_output": ["EmptyKTY"],
+            "pos": {"x": 3, "y": 3},
+            "scale": {"width": 100, "height": 100}
+        }
+    },
+    "ribs": {
+        "rib1": {"node_in": 1, "node_out": 2, "storage": 200, "type_el": "KTY"},
+        "rib2": {"node_in": 2, "node_out": 3, "storage": 500, "type_el": "Product"},
+        "rib3": {"node_in": 3, "node_out": 4, "storage": 500, "type_el": "Product"},
+        "rib4": {"node_in": 2, "node_out": 5, "storage": 300, "type_el": "EmptyKTY"},
+        "rib5": {"node_in": 5, "node_out": 4, "storage": 300, "type_el": "EmptyKTY"}
+    },
+    "input_stream": 100000
+}
